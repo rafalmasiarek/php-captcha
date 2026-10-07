@@ -17,6 +17,6 @@ namespace rafalmasiarek\Captcha;
  *
  * @package rafalmasiarek\Captcha
  */
-class CaptchaTimeoutException extends CaptchaVerificationException
+class CaptchaTimeoutException extends CaptchaTransportFailureException
 {
 }

@@ -101,19 +101,21 @@ abstract class AbstractSiteVerifyVerifier implements CaptchaVerifierInterface
 
         $error = $response->getError();
         if ($error !== null) {
+            $transportInfo = $response->getInfo();
+
             // HttpResponseInterface::getError() is free text (e.g. curl_strerror()'s
             // output), not a structured error code — rafalmasiarek/http-client doesn't
             // expose one today. Matching "timed out" against curl's own stable English
             // error strings is a best-effort heuristic, not a guarantee.
             if (\stripos($error, 'timed out') !== false || \stripos($error, 'timeout') !== false) {
-                throw new CaptchaTimeoutException("Timed out verifying against {$endpoint}: {$error}");
+                throw new CaptchaTimeoutException("Timed out verifying against {$endpoint}: {$error}", $transportInfo);
             }
-            throw new CaptchaTransportException("Unable to reach {$endpoint}: {$error}");
+            throw new CaptchaTransportException("Unable to reach {$endpoint}: {$error}", $transportInfo);
         }
 
         $data = $response->json();
         if (!\is_array($data)) {
-            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}");
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}", $response->getStatusCode());
         }
 
         return new CaptchaResult(

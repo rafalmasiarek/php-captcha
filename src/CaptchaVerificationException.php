@@ -7,8 +7,9 @@ namespace rafalmasiarek\Captcha;
 /**
  * Base type for every exception thrown when a verification call itself
  * fails — never for a legitimate "the token was rejected" outcome, which is
- * a normal CaptchaResult with success=false (see CaptchaResult::$errorCodes
- * / CaptchaErrorCode for why it was rejected).
+ * a normal CaptchaResult with success=false (see CaptchaResult::$errorCodes,
+ * and the concrete provider's own error-code enum under Provider\, for why
+ * it was rejected).
  *
  * Thrown directly only when no more specific subtype applies; prefer
  * catching CaptchaTimeoutException / CaptchaTransportException /

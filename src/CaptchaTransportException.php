@@ -12,6 +12,6 @@ namespace rafalmasiarek\Captcha;
  *
  * @package rafalmasiarek\Captcha
  */
-class CaptchaTransportException extends CaptchaVerificationException
+class CaptchaTransportException extends CaptchaTransportFailureException
 {
 }

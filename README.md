@@ -10,8 +10,8 @@ Deliberately out of scope: widget rendering (script URLs, `data-*` attributes, t
 
 ## Namespace layout
 
-- `rafalmasiarek\Captcha\*` — the core contract: `CaptchaVerifierInterface`, `CaptchaResult`, `CaptchaErrorCode`, `RemoteIpProviderInterface`, and the exception hierarchy. Stable, provider-agnostic.
-- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaVerifier`, `TurnstileVerifier`, `HCaptchaVerifier`) plus the shared `AbstractSiteVerifyVerifier` they're built on. A consumer plugging in an entirely custom provider only ever needs to implement `CaptchaVerifierInterface` directly — nothing in this sub-namespace is required.
+- `rafalmasiarek\Captcha\*` — the core contract: `CaptchaVerifierInterface`, `CaptchaResult`, `RemoteIpProviderInterface`, and the exception hierarchy. Stable, genuinely provider-agnostic — nothing here knows any provider's name, endpoint, or error-code vocabulary. `CaptchaResult::$errorCodes` stays raw strings for exactly this reason.
+- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaVerifier`, `TurnstileVerifier`, `HCaptchaVerifier`), the shared `AbstractSiteVerifyVerifier` they're built on, and each provider's own error-code enum (`RecaptchaErrorCode`, `TurnstileErrorCode`, `HCaptchaErrorCode`). A consumer plugging in an entirely custom provider only ever needs to implement `CaptchaVerifierInterface` directly — nothing in this sub-namespace is required.
 
 ## Install
 
@@ -57,20 +57,38 @@ if ($result->success) {
 $result->score;
 $result->action;
 
-// raw provider error codes (never filtered — an unrecognized/future code is still here)
+// raw provider error codes — CaptchaResult has no opinion on what they mean;
+// map them through the concrete provider's own enum to classify them (below)
 $result->errorCodes;
-
-// the same codes, mapped to CaptchaErrorCode where recognized
-$result->knownErrorCodes();
-
-// true when a known code means OUR integration is misconfigured (wrong/missing
-// secret, malformed request) rather than the token being legitimately rejected
-$result->isConfigurationError();
 
 // the full decoded JSON response — reach in here for a provider-specific field
 // this DTO doesn't name, e.g. Turnstile's "cdata"/"metadata" or hCaptcha's "credit"
 $result->raw;
 ```
+
+### Classifying error codes — per provider, not in the core
+
+`CaptchaResult::$errorCodes` is just raw strings; it has no idea which provider sent them. Each provider has its own enum, under `Provider\`, for a caller who knows which one they're using:
+
+```php
+use rafalmasiarek\Captcha\Provider\RecaptchaErrorCode;
+
+$codes = \array_filter(\array_map(
+    static fn(string $code): ?RecaptchaErrorCode => RecaptchaErrorCode::tryFrom($code),
+    $result->errorCodes,
+));
+
+foreach ($codes as $code) {
+    if ($code->isConfigurationError()) {
+        // our secret key / request is wrong — fix the integration, not a user retry
+    }
+    if ($code->isTokenRejection()) {
+        // the token was legitimately rejected (expired, reused, malformed)
+    }
+}
+```
+
+`TurnstileErrorCode` and `HCaptchaErrorCode` work the same way, each cataloging only its own provider's documented codes.
 
 ### Passing the remote IP via an object instead of a string
 
@@ -121,12 +139,10 @@ $turnstile->verifyWithIdempotencyKey($token, $idempotencyKey, $remoteIp);
 
 Two independent axes:
 
-- **Did the call itself fail?** (`CaptchaVerificationException` and its subtypes `CaptchaTimeoutException` / `CaptchaTransportException` / `CaptchaResponseException`) — a network/parsing problem, never thrown for a legitimately rejected token.
-- **Why was a token rejected?** (`CaptchaResult::$errorCodes`, `knownErrorCodes()`, `isConfigurationError()`) — a normal, successfully-completed call that reports `success: false`.
+- **Did the call itself fail?** (`CaptchaVerificationException` and its subtypes `CaptchaTimeoutException` / `CaptchaTransportException` — both carry `$transportInfo`, a snapshot of `HttpResponseInterface::getInfo()` for diagnostics — and `CaptchaResponseException`, which carries `$statusCode`) — a network/parsing problem, never thrown for a legitimately rejected token.
+- **Why was a token rejected?** (`CaptchaResult::$errorCodes`, mapped through the concrete provider's own error-code enum — see above) — a normal, successfully-completed call that reports `success: false`.
 
 Timeout detection matches `HttpResponseInterface::getError()`'s free-text message against curl's own stable English error strings — `rafalmasiarek/http-client` doesn't expose a structured transport-error code today, so this is a best-effort heuristic, not a guarantee.
-
-`CaptchaErrorCode` catalogs the error codes documented by all three providers (`missing-input-secret`, `invalid-input-secret`, `bad-request`, `sitekey-secret-mismatch` → `isConfigurationError()`; `missing-input-response`, `invalid-input-response`, `timeout-or-duplicate`, `invalid-or-already-seen-response` → `isTokenRejection()`) — see the enum's own docblock for sources. `CaptchaResult::$errorCodes` always keeps every raw string the provider sent, so an unrecognized/future code is never dropped even though it won't appear in `knownErrorCodes()`.
 
 ## Testing with official test keys
 
