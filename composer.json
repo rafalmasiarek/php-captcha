@@ -1,0 +1,20 @@
+{
+    "name": "rafalmasiarek/captcha",
+    "description": "Universal CAPTCHA verification for PHP: Google reCAPTCHA (v2/v3), Cloudflare Turnstile, and hCaptcha behind one Strategy-pattern facade. Built on rafalmasiarek/http-client.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "rafalmasiarek/http-client": "^2.0",
+        "rafalmasiarek/dns-resolver": "^0.2.0"
+    },
+    "suggest": {
+        "rafalmasiarek/real-ip-resolver": "Resolve the real client IP behind trusted reverse proxies instead of the naive SystemRemoteIpProvider default — wrap RealIpResolver::getIp() in a small adapter implementing RemoteIpProviderInterface."
+    },
+    "autoload": {
+        "psr-4": {
+            "rafalmasiarek\\Captcha\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}

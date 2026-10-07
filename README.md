@@ -1,2 +1,161 @@
-# php-captcha
-Universal CAPTCHA verification interface for PHP: reCAPTCHA, Cloudflare Turnstile, hCaptcha — one interface, built on rafalmasiarek/http-client
+# rafalmasiarek/captcha
+
+Universal CAPTCHA verification for PHP: Google reCAPTCHA (v2/v3), Cloudflare Turnstile, and hCaptcha behind one Strategy-pattern facade. Built on [`rafalmasiarek/http-client`](https://github.com/rafalmasiarek/php-http-client) — no provider-specific SDK, no cURL/Guzzle dependency of its own.
+
+## Why
+
+reCAPTCHA, Turnstile, and hCaptcha all speak a near-identical "siteverify" protocol: POST a secret key + the client-submitted token (+ optionally the user's IP) to a fixed endpoint, get back `{success, ...}` as JSON. Turnstile and hCaptcha deliberately mirror reCAPTCHA's wire format for drop-in compatibility.
+
+`Captcha` is the one class that speaks this protocol — its constructor and `verify()` signature never change based on which provider is configured. Switching providers means swapping one constructor argument (a `CaptchaProviderInterface`); nothing else in your code changes, including how you read errors — see "Provider-agnostic error categories" below.
+
+Deliberately out of scope: widget rendering (script URLs, `data-*` attributes, the client-side form field name). That differs per provider *and* per consuming framework/template engine, so it belongs to the caller — this library only covers server-side verification.
+
+## Namespace layout
+
+- `rafalmasiarek\Captcha\*` — `Captcha` itself, `CaptchaProviderInterface`, `CaptchaResult`, `CaptchaErrorCategory`, `RemoteIpProviderInterface`/`SystemRemoteIpProvider`, and the exception hierarchy. Knows the *siteverify protocol shape*, but no specific vendor by name.
+- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaProvider`, `TurnstileProvider`, `HCaptchaProvider`) and each one's own fully self-contained error-code enum (`RecaptchaErrorCode`, `TurnstileErrorCode`, `HCaptchaErrorCode`). These are the only classes that know a vendor's name, endpoint, or exact error-code vocabulary.
+- An entirely custom provider that doesn't follow the siteverify protocol at all implements `CaptchaVerifierInterface` directly, bypassing `Captcha`/`CaptchaProviderInterface` entirely.
+
+## Install
+
+```bash
+composer require rafalmasiarek/captcha
+```
+
+## Usage
+
+```php
+use rafalmasiarek\Captcha\Captcha;
+use rafalmasiarek\Captcha\Provider\RecaptchaProvider;
+use rafalmasiarek\Captcha\Provider\TurnstileProvider;
+use rafalmasiarek\Captcha\Provider\HCaptchaProvider;
+use rafalmasiarek\Captcha\CaptchaTimeoutException;
+use rafalmasiarek\Captcha\CaptchaTransportException;
+use rafalmasiarek\Captcha\CaptchaResponseException;
+
+// Provider-specific arguments live ONLY on the provider object.
+$provider = new RecaptchaProvider($secretKey);
+// or: new TurnstileProvider($secretKey);
+// or: new HCaptchaProvider($secretKey, siteKey: $siteKey);
+
+// Captcha's constructor is IDENTICAL regardless of which provider you pass.
+$captcha = new Captcha($provider);
+
+try {
+    $result = $captcha->verify($tokenFromClient, $remoteIp);
+} catch (CaptchaTimeoutException $e) {
+    // the provider didn't respond within the timeout — $e->transportInfo has dns/connect/tls/total timing
+} catch (CaptchaTransportException $e) {
+    // couldn't reach the provider at all (DNS, connection refused, TLS, ...) — $e->transportInfo too
+} catch (CaptchaResponseException $e) {
+    // the provider responded, but the body wasn't valid JSON — $e->statusCode
+}
+
+if ($result->success) {
+    // accepted
+}
+```
+
+### $http and $remoteIp: override what you need, sensible defaults otherwise
+
+Both follow the same "explicit override, zero-config fallback" shape:
+
+```php
+// $http: omit it to get CurlHttpClient(SystemDnsResolver()) automatically.
+$captcha = new Captcha($provider, http: $myConfiguredHttpClient);
+
+// $remoteIp: omit it on verify() to get SystemRemoteIpProvider's naive
+// $_SERVER['REMOTE_ADDR'] automatically. Three levels of precedence:
+$captcha->verify($token, $remoteIp);              // 1. explicit per-call value wins
+$captcha = new Captcha($provider, defaultIpProvider: $resolver);  // 2. bound once, used when verify() doesn't override
+// 3. SystemRemoteIpProvider — used when neither of the above is set
+```
+
+`rafalmasiarek/real-ip-resolver`'s `RealIpResolver` resolves the real client IP behind trusted reverse proxies, but doesn't implement `RemoteIpProviderInterface` directly (different method name/return type) — bridge it with a one-line adapter:
+
+```php
+use rafalmasiarek\Captcha\RemoteIpProviderInterface;
+
+final class RealIpResolverAdapter implements RemoteIpProviderInterface
+{
+    public function __construct(private readonly RealIpResolver $resolver) {}
+
+    public function getRemoteIp(): ?string
+    {
+        $ip = $this->resolver->getIp();
+        return $ip !== '' ? $ip : null;
+    }
+}
+
+$captcha = new Captcha($provider, defaultIpProvider: new RealIpResolverAdapter($realIpResolver));
+```
+
+### Provider-specific extras live on the provider, not on Captcha
+
+A capability only one provider has is a method on *its* provider class — `Captcha::verify()` never changes shape to accommodate it:
+
+```php
+// Turnstile: re-verify the same token (e.g. after a retried request) without
+// Cloudflare flagging it as reuse. withIdempotencyKey() returns a new provider
+// instance; Captcha itself doesn't need to know this capability exists.
+$provider = (new TurnstileProvider($secretKey))->withIdempotencyKey($idempotencyKey);
+$captcha = new Captcha($provider);
+$captcha->verify($token, $remoteIp);
+```
+
+### reCAPTCHA v3 / hCaptcha Enterprise score and action thresholds
+
+```php
+$captcha = new Captcha($provider, minScore: 0.5, expectedAction: 'login');
+```
+
+No-ops for a provider/mode that doesn't return a score or action (reCAPTCHA v2, Turnstile, standard hCaptcha) — `$result->success` folds in the threshold checks alongside the provider's own verdict, so a caller only ever needs to check one field.
+
+### Provider-agnostic error categories
+
+This is the point of the whole design: `CaptchaResult::$errorCategories` uses the **same enum** no matter which provider produced the result, so your error-handling/stats/debug code never changes when you swap providers.
+
+```php
+use rafalmasiarek\Captcha\CaptchaErrorCategory;
+
+if (\in_array(CaptchaErrorCategory::ConfigurationError, $result->errorCategories, true)) {
+    // our secret key / request is wrong — fix the integration, not a user retry
+}
+if (\in_array(CaptchaErrorCategory::TokenRejected, $result->errorCategories, true)) {
+    // the token was legitimately rejected (expired, reused, malformed)
+}
+if (\in_array(CaptchaErrorCategory::ScoreTooLow, $result->errorCategories, true)) {
+    // passed the provider's own check, but didn't meet $minScore
+}
+```
+
+`CaptchaResult::$errorCodes` still carries the raw, provider-specific strings (e.g. `"timeout-or-duplicate"`) for anyone who wants that level of detail — map them through the concrete provider's own enum (`RecaptchaErrorCode::tryFrom()`, etc., under `Provider\`) when you know which provider you're using.
+
+`CaptchaResult::toDebugArray()` returns a flat, stable-shaped array (`success`, `score`, `action`, `error_codes`, `error_categories`, `challenge_ts`, `hostname`) ready for a log context (Bugsnag, PSR-3) — identical keys regardless of provider.
+
+### $raw: nothing is ever lost
+
+`CaptchaResult::$raw` is the full decoded JSON response — reach into it for a provider-specific field the DTO doesn't name, e.g. Turnstile's `cdata`/`metadata` or hCaptcha's `credit`/`score_reason`.
+
+## Error handling
+
+Two independent axes:
+
+- **Did the call itself fail?** (`CaptchaVerificationException` and its subtypes `CaptchaTimeoutException` / `CaptchaTransportException` — both carry `$transportInfo`, a snapshot of `HttpResponseInterface::getInfo()` for diagnostics — and `CaptchaResponseException`, which carries `$statusCode`.) A network/parsing problem, never thrown for a legitimately rejected token.
+- **Why was a token rejected?** `CaptchaResult::$errorCategories` (provider-agnostic) and `$errorCodes` (raw) — a normal, successfully-completed call that reports `success: false`.
+
+Timeout detection matches `HttpResponseInterface::getError()`'s free-text message against curl's own stable English error strings — `rafalmasiarek/http-client` doesn't expose a structured transport-error code today, so this is a best-effort heuristic, not a guarantee.
+
+## Testing with official test keys
+
+Every provider publishes a secret/site key pair that always verifies successfully, meant exactly for integration testing like this:
+
+| Provider | Secret key |
+|---|---|
+| reCAPTCHA v2 | `6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe` |
+| hCaptcha | `0x0000000000000000000000000000000000000000` |
+| Turnstile | `1x0000000000000000000000000000000AA` |
+
+## License
+
+MIT
