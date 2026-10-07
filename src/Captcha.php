@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace rafalmasiarek\Captcha;
 
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use rafalmasiarek\DnsResolver\SystemDnsResolver;
 use rafalmasiarek\HttpClient\Http\CurlHttpClient;
 use rafalmasiarek\HttpClient\Http\HttpClientInterface;
@@ -22,10 +24,21 @@ use rafalmasiarek\HttpClient\Http\HttpClientInterface;
  * "explicit override, sensible fallback" shape verify()'s own $remoteIp
  * parameter already has.
  *
+ * Logs short, dot-namespaced events ("captcha.verify.ok"/".rejected"/
+ * ".timeout"/".transport_error"/".invalid_response") to an optional PSR-3
+ * logger — rejections and failures always log; successes only when $audit
+ * is true, matching rafalmasiarek/dns-resolver's FailoverDnsClient. $container
+ * identifies this instance in that log output (e.g. "contactform_main",
+ * "login") when an app configures more than one Captcha, mirroring this
+ * app's own CSRF module's "container" concept — never sent to the provider,
+ * purely a local log/debug label.
+ *
  * @package rafalmasiarek\Captcha
  */
 final class Captcha implements CaptchaVerifierInterface
 {
+    private readonly LoggerInterface $logger;
+
     /**
      * @param CaptchaProviderInterface $provider
      * @param RemoteIpProviderInterface|null $defaultIpProvider Used when verify() isn't
@@ -36,6 +49,13 @@ final class Captcha implements CaptchaVerifierInterface
      *                              provider/mode that doesn't return a score.
      * @param string|null $expectedAction Expected action value (null = do not check). No-ops
      *                                    for a provider/mode that doesn't return an action.
+     * @param string|null $container Local label identifying this instance in log output —
+     *                                e.g. "contactform_main", "login" — when an app configures
+     *                                more than one Captcha. Never sent to the provider.
+     * @param LoggerInterface|null $logger Receives rejection/failure warnings/errors always,
+     *                                      and (when $audit is true) a debug entry for every
+     *                                      successful verification. Defaults to a no-op logger.
+     * @param bool $audit Whether to also log successful verifications (debug level).
      */
     public function __construct(
         private readonly CaptchaProviderInterface $provider,
@@ -44,7 +64,23 @@ final class Captcha implements CaptchaVerifierInterface
         private readonly float $timeout = 10.0,
         private readonly ?float $minScore = null,
         private readonly ?string $expectedAction = null,
+        private readonly ?string $container = null,
+        ?LoggerInterface $logger = null,
+        private readonly bool $audit = false,
     ) {
+        $this->logger = $logger ?? new NullLogger();
+    }
+
+    /**
+     * The provider this instance verifies against — e.g. for a caller that
+     * wants to discover CaptchaProviderInterface::defaultTokenFieldName()
+     * without hardcoding any vendor's convention itself.
+     *
+     * @return CaptchaProviderInterface
+     */
+    public function provider(): CaptchaProviderInterface
+    {
+        return $this->provider;
     }
 
     /**
@@ -72,13 +108,16 @@ final class Captcha implements CaptchaVerifierInterface
             // expose one today. Matching "timed out" against curl's own stable English
             // error strings is a best-effort heuristic, not a guarantee.
             if (\stripos($error, 'timed out') !== false || \stripos($error, 'timeout') !== false) {
+                $this->log('warning', 'captcha.verify.timeout', ['error' => $error]);
                 throw new CaptchaTimeoutException("Timed out verifying against {$endpoint}: {$error}", $transportInfo);
             }
+            $this->log('warning', 'captcha.verify.transport_error', ['error' => $error]);
             throw new CaptchaTransportException("Unable to reach {$endpoint}: {$error}", $transportInfo);
         }
 
         $data = $response->json();
         if (!\is_array($data)) {
+            $this->log('error', 'captcha.verify.invalid_response', ['status_code' => $response->getStatusCode()]);
             throw new CaptchaResponseException("Malformed JSON response from {$endpoint}", $response->getStatusCode());
         }
 
@@ -106,7 +145,7 @@ final class Captcha implements CaptchaVerifierInterface
             $categories[] = CaptchaErrorCategory::ActionMismatch;
         }
 
-        return new CaptchaResult(
+        $result = new CaptchaResult(
             success: $apiSuccess && $scoreOk && $actionOk,
             score: $score,
             action: $action,
@@ -116,6 +155,16 @@ final class Captcha implements CaptchaVerifierInterface
             hostname: isset($data['hostname']) ? (string) $data['hostname'] : null,
             raw: $data,
         );
+
+        if ($result->success) {
+            if ($this->audit) {
+                $this->log('debug', 'captcha.verify.ok', $result->toDebugArray());
+            }
+        } else {
+            $this->log('warning', 'captcha.verify.rejected', $result->toDebugArray());
+        }
+
+        return $result;
     }
 
     /**
@@ -138,5 +187,20 @@ final class Captcha implements CaptchaVerifierInterface
             return $this->defaultIpProvider->getRemoteIp();
         }
         return (new SystemRemoteIpProvider())->getRemoteIp();
+    }
+
+    /**
+     * @param string $level PSR-3 log level.
+     * @param string $message Dot-namespaced event code.
+     * @param array<string, mixed> $context
+     *
+     * @return void
+     */
+    private function log(string $level, string $message, array $context = []): void
+    {
+        if ($this->container !== null) {
+            $context['container'] = $this->container;
+        }
+        $this->logger->log($level, $message, $context);
     }
 }

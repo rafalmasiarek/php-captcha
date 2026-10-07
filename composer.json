@@ -5,6 +5,7 @@
     "license": "MIT",
     "require": {
         "php": ">=8.2",
+        "psr/log": "^3.0",
         "rafalmasiarek/http-client": "^2.0",
         "rafalmasiarek/dns-resolver": "^0.2.0"
     },

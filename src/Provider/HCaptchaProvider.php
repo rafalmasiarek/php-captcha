@@ -44,6 +44,14 @@ final class HCaptchaProvider implements CaptchaProviderInterface
     /**
      * {@inheritDoc}
      */
+    public function defaultTokenFieldName(): string
+    {
+        return 'h-captcha-response';
+    }
+
+    /**
+     * {@inheritDoc}
+     */
     public function secretKey(): string
     {
         return $this->secretKey;

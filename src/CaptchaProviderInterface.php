@@ -14,7 +14,7 @@ namespace rafalmasiarek\Captcha;
  *
  * A pure, stateless-from-the-outside value object — no HTTP logic here;
  * Captcha owns the actual request/response handling and reads this
- * interface's four methods to do it.
+ * interface's five methods to do it.
  *
  * @package rafalmasiarek\Captcha
  */
@@ -24,6 +24,18 @@ interface CaptchaProviderInterface
      * @return string Absolute URL of this provider's siteverify endpoint.
      */
     public function endpoint(): string;
+
+    /**
+     * The conventional HTML form field name this provider's widget posts its
+     * token under (e.g. "g-recaptcha-response") — a discoverable default for
+     * a caller that reads the token out of a request body, so nothing above
+     * this interface needs to hardcode any one vendor's convention. Purely
+     * informational: Captcha::verify() always takes the token value directly
+     * and never reads a request body itself.
+     *
+     * @return string
+     */
+    public function defaultTokenFieldName(): string;
 
     /**
      * @return string This provider's secret key.

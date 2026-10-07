@@ -55,6 +55,14 @@ final class TurnstileProvider implements CaptchaProviderInterface
     /**
      * {@inheritDoc}
      */
+    public function defaultTokenFieldName(): string
+    {
+        return 'cf-turnstile-response';
+    }
+
+    /**
+     * {@inheritDoc}
+     */
     public function secretKey(): string
     {
         return $this->secretKey;

@@ -44,6 +44,14 @@ final class RecaptchaProvider implements CaptchaProviderInterface
     /**
      * {@inheritDoc}
      */
+    public function defaultTokenFieldName(): string
+    {
+        return 'g-recaptcha-response';
+    }
+
+    /**
+     * {@inheritDoc}
+     */
     public function extraParams(): array
     {
         return [];
