@@ -22,14 +22,18 @@ interface CaptchaVerifierInterface
     /**
      * @param string $token The token the client submitted (e.g. "g-recaptcha-response",
      *                       "cf-turnstile-response", or "h-captcha-response" form field).
-     * @param string|null $remoteIp The end user's IP address, when available. Optional for
-     *                              every provider; improves verification accuracy.
+     * @param string|RemoteIpProviderInterface|null $remoteIp The end user's real IP address
+     *                              (post-trusted-proxy-resolution — e.g. from
+     *                              rafalmasiarek/real-ip-resolver's RealIpResolver, not a raw
+     *                              $_SERVER['REMOTE_ADDR']), as a string, or an object that
+     *                              resolves it lazily via RemoteIpProviderInterface. Optional
+     *                              for every provider; improves verification accuracy.
      *
-     * @throws CaptchaVerificationException When the verification call itself fails
-     *                                       (transport error, malformed response) —
-     *                                       never thrown for a rejected token.
+     * @throws CaptchaTimeoutException When the provider doesn't respond within the timeout.
+     * @throws CaptchaTransportException On any other transport failure.
+     * @throws CaptchaResponseException When the response body isn't valid JSON.
      *
      * @return CaptchaResult
      */
-    public function verify(string $token, ?string $remoteIp = null): CaptchaResult;
+    public function verify(string $token, string|RemoteIpProviderInterface|null $remoteIp = null): CaptchaResult;
 }

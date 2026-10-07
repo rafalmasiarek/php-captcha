@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace rafalmasiarek\Captcha;
+namespace rafalmasiarek\Captcha\Provider;
 
 use rafalmasiarek\HttpClient\Http\HttpClientInterface;
 
@@ -11,7 +11,12 @@ use rafalmasiarek\HttpClient\Http\HttpClientInterface;
  * Enterprise additionally returns a confidence score, picked up by the
  * base class's generic handling with no code difference here.
  *
- * @package rafalmasiarek\Captcha
+ * hCaptcha-specific response fields not named on CaptchaResult — "credit"
+ * (whether this solve counts toward hCaptcha's publisher reward program)
+ * and Enterprise's "score_reason" (an explanation array for the score) —
+ * are always available via CaptchaResult::$raw.
+ *
+ * @package rafalmasiarek\Captcha\Provider
  */
 final class HCaptchaVerifier extends AbstractSiteVerifyVerifier
 {

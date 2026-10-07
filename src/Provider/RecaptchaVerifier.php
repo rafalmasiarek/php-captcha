@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace rafalmasiarek\Captcha;
+namespace rafalmasiarek\Captcha\Provider;
 
 /**
  * Verifies a Google reCAPTCHA (v2 or v3) token. v2 responses have no
@@ -10,7 +10,7 @@ namespace rafalmasiarek\Captcha;
  * handling — no v2/v3 distinction is needed in code, only in which secret
  * key is configured.
  *
- * @package rafalmasiarek\Captcha
+ * @package rafalmasiarek\Captcha\Provider
  */
 final class RecaptchaVerifier extends AbstractSiteVerifyVerifier
 {
