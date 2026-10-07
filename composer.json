@@ -1,0 +1,16 @@
+{
+    "name": "rafalmasiarek/captcha",
+    "description": "Universal CAPTCHA verification interface for PHP: reCAPTCHA, Cloudflare Turnstile, hCaptcha — one interface, built on rafalmasiarek/http-client.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "rafalmasiarek/http-client": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "rafalmasiarek\\Captcha\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}
