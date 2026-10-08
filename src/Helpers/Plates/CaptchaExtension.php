@@ -35,10 +35,12 @@ final class CaptchaExtension
             static function (
                 CaptchaWidgetDescriptor $widget,
                 string $siteKey,
-                string $successCallback = 'captchaSuccess',
-                string $expiredCallback = 'captchaExpired',
+                ?string $successCallback = null,
+                ?string $expiredCallback = null,
+                string $instanceId = 'default',
+                string $validationMessage = 'Please complete the CAPTCHA.',
             ): string {
-                return HtmlHelper::widget($widget, $siteKey, $successCallback, $expiredCallback);
+                return HtmlHelper::widget($widget, $siteKey, $successCallback, $expiredCallback, $instanceId, $validationMessage);
             }
         );
 
@@ -48,10 +50,12 @@ final class CaptchaExtension
                 CaptchaWidgetDescriptor $widget,
                 string $siteKey,
                 string $action = '',
-                string $successCallback = 'captchaSuccess',
-                string $expiredCallback = 'captchaExpired',
+                ?string $successCallback = null,
+                ?string $expiredCallback = null,
+                string $instanceId = 'default',
+                ?string $nonce = null,
             ): string {
-                return HtmlHelper::scripts($widget, $siteKey, $action, $successCallback, $expiredCallback);
+                return HtmlHelper::scripts($widget, $siteKey, $action, $successCallback, $expiredCallback, $instanceId, $nonce);
             }
         );
     }
