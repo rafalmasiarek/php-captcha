@@ -13,7 +13,8 @@ Deliberately out of scope: widget rendering (script URLs, `data-*` attributes, t
 ## Namespace layout
 
 - `rafalmasiarek\Captcha\*` — `Captcha` itself, `CaptchaProviderInterface`, `CaptchaResult`, `CaptchaErrorCategory`, `RemoteIpProviderInterface`/`SystemRemoteIpProvider`, and the exception hierarchy. Knows the *siteverify protocol shape*, but no specific vendor by name.
-- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaProvider`, `TurnstileProvider`, `HCaptchaProvider`) and each one's own fully self-contained error-code enum (`RecaptchaErrorCode`, `TurnstileErrorCode`, `HCaptchaErrorCode`). These are the only classes that know a vendor's name, endpoint, or exact error-code vocabulary.
+- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaProvider`, `TurnstileProvider`, `HCaptchaProvider`), each one's own fully self-contained error-code enum (`RecaptchaErrorCode`, `TurnstileErrorCode`, `HCaptchaErrorCode`), and `CaptchaWidgetVariant` (raw widget metadata — see below). These are the only classes that know a vendor's name, endpoint, or exact error-code vocabulary.
+- `rafalmasiarek\Captcha\Helpers\*` — entirely optional widget-rendering helpers (see below). Verification never depends on this namespace.
 - An entirely custom provider that doesn't follow the siteverify protocol at all implements `CaptchaVerifierInterface` directly, bypassing `Captcha`/`CaptchaProviderInterface` entirely.
 
 ## Install
@@ -145,6 +146,44 @@ Two independent axes:
 - **Why was a token rejected?** `CaptchaResult::$errorCategories` (provider-agnostic) and `$errorCodes` (raw) — a normal, successfully-completed call that reports `success: false`.
 
 Timeout detection matches `HttpResponseInterface::getError()`'s free-text message against curl's own stable English error strings — `rafalmasiarek/http-client` doesn't expose a structured transport-error code today, so this is a best-effort heuristic, not a guarantee.
+
+## Optional widget-rendering helpers
+
+Verification stays provider-agnostic and renders nothing — but a small, genuinely optional `Helpers\` layer ships alongside it for the common case of actually drawing the widget, mirroring the pattern used by [`rafalmasiarek/csrf-token`](https://github.com/rafalmasiarek/php-csrf)'s own `Helpers\`. None of this namespace is required by, or referenced from, anything under `Provider\` or the core — it's purely additive.
+
+- `Provider\CaptchaWidgetVariant` — raw data only (script URL, widget CSS class, whether it's invisible, token field name) for the four distinct widget shapes (`RecaptchaV2`, `RecaptchaV3`, `Turnstile`, `HCaptcha` — note v2/v3 render completely differently client-side despite both verifying through the same `RecaptchaProvider`). No HTML/JS here.
+- `Helpers\HtmlHelper` — template-engine-agnostic: `widget()`/`scripts()` return plain HTML strings. Zero dependency on any template engine; call it directly from raw PHP.
+- `Helpers\Twig\CaptchaExtension` — Twig extension exposing `captcha_widget()`/`captcha_scripts()` Twig functions.
+- `Helpers\Blade\CaptchaBlade::register($bladeCompiler)` — registers `@captchaWidget(...)`/`@captchaScripts(...)` Blade directives.
+- `Helpers\Plates\CaptchaExtension::register($engine)` — registers `captcha_widget()`/`captcha_scripts()` Plates template functions.
+
+None of Twig/Laravel/Plates is declared anywhere in `composer.json` — not even in `suggest` — matching `rafalmasiarek/csrf-token`'s own convention exactly. These classes are never autoloaded unless a consumer actually references them, so the corresponding package is never required just because the file exists; a consumer who wants one of these helpers already has that template engine in their own project.
+
+```php
+use rafalmasiarek\Captcha\Helpers\HtmlHelper;
+use rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant;
+
+echo HtmlHelper::widget(CaptchaWidgetVariant::Turnstile, $siteKey);
+echo HtmlHelper::scripts(CaptchaWidgetVariant::Turnstile, $siteKey);
+```
+
+```twig
+{# with Helpers\Twig\CaptchaExtension registered #}
+{{ captcha_widget(variant, siteKey) }}
+{{ captcha_scripts(variant, siteKey) }}
+```
+
+```blade
+{{-- with Helpers\Blade\CaptchaBlade::register($bladeCompiler) called --}}
+@captchaWidget($variant, $siteKey)
+@captchaScripts($variant, $siteKey)
+```
+
+```php
+<?php // with Helpers\Plates\CaptchaExtension::register($engine) called ?>
+<?= $this->captcha_widget($variant, $siteKey) ?>
+<?= $this->captcha_scripts($variant, $siteKey) ?>
+```
 
 ## Testing with official test keys
 
