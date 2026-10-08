@@ -38,6 +38,9 @@ enum CaptchaErrorCategory
     /** The token verified, but its action didn't match the configured expectation. */
     case ActionMismatch;
 
+    /** The token verified, but its hostname didn't match the configured expectation. */
+    case HostnameMismatch;
+
     /** A raw error code the provider sent that isn't recognized. */
     case Unknown;
 }

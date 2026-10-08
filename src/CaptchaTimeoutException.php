@@ -8,12 +8,10 @@ namespace rafalmasiarek\Captcha;
  * Thrown when the provider's siteverify endpoint did not respond within the
  * configured timeout.
  *
- * Detection is a best-effort match against HttpResponseInterface::getError()'s
- * free-text message (e.g. curl's "Operation timed out after..." string) —
- * rafalmasiarek/http-client does not currently expose a structured transport-
- * error code, only this human-readable string, so this is a heuristic, not a
- * guarantee. A transport failure that isn't recognized as a timeout is thrown
- * as the less specific CaptchaTransportException instead.
+ * Detection checks HttpResponseInterface::getErrorKind() === TransportErrorKind::Timeout
+ * — a structured classification based on curl's own error code (CURLE_OPERATION_TIMEDOUT),
+ * not a string match against the free-text getError() message. A transport failure
+ * that isn't a timeout is thrown as the less specific CaptchaTransportException instead.
  *
  * @package rafalmasiarek\Captcha
  */

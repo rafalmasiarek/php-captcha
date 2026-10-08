@@ -9,6 +9,7 @@ use Psr\Log\NullLogger;
 use rafalmasiarek\DnsResolver\SystemDnsResolver;
 use rafalmasiarek\HttpClient\Http\CurlHttpClient;
 use rafalmasiarek\HttpClient\Http\HttpClientInterface;
+use rafalmasiarek\HttpClient\Http\TransportErrorKind;
 
 /**
  * Verifies a CAPTCHA token against any provider that follows the
@@ -45,10 +46,16 @@ final class Captcha implements CaptchaVerifierInterface
      *        given its own $remoteIp. Falls back to SystemRemoteIpProvider when also null.
      * @param HttpClientInterface|null $http Falls back to CurlHttpClient(SystemDnsResolver()) when null.
      * @param float $timeout Request timeout in seconds.
-     * @param float|null $minScore Minimum accepted score (null = do not check). No-ops for a
-     *                              provider/mode that doesn't return a score.
-     * @param string|null $expectedAction Expected action value (null = do not check). No-ops
-     *                                    for a provider/mode that doesn't return an action.
+     * @param float|null $minScore Minimum accepted score, inclusive, in [0.0, 1.0] (null = do
+     *                              not check). Fails closed: a response missing a score (or
+     *                              returning one out of range) does NOT satisfy this check once
+     *                              configured, regardless of what the provider/mode normally
+     *                              returns — a legitimate provider/mode without scores should
+     *                              leave this null rather than configure one that can never pass.
+     * @param string|null $expectedAction Expected action value (null = do not check). Fails
+     *                                     closed the same way as $minScore when configured.
+     * @param string|null $expectedHostname Expected "hostname" field (null = do not check).
+     *                                       Fails closed the same way when configured.
      * @param string|null $container Local label identifying this instance in log output —
      *                                e.g. "contactform_main", "login" — when an app configures
      *                                more than one Captcha. Never sent to the provider.
@@ -56,6 +63,9 @@ final class Captcha implements CaptchaVerifierInterface
      *                                      and (when $audit is true) a debug entry for every
      *                                      successful verification. Defaults to a no-op logger.
      * @param bool $audit Whether to also log successful verifications (debug level).
+     *
+     * @throws \InvalidArgumentException When $minScore is outside [0.0, 1.0], or $expectedAction/
+     *                                    $expectedHostname is an empty string.
      */
     public function __construct(
         private readonly CaptchaProviderInterface $provider,
@@ -64,10 +74,20 @@ final class Captcha implements CaptchaVerifierInterface
         private readonly float $timeout = 10.0,
         private readonly ?float $minScore = null,
         private readonly ?string $expectedAction = null,
+        private readonly ?string $expectedHostname = null,
         private readonly ?string $container = null,
         ?LoggerInterface $logger = null,
         private readonly bool $audit = false,
     ) {
+        if ($minScore !== null && (!\is_finite($minScore) || $minScore < 0.0 || $minScore > 1.0)) {
+            throw new \InvalidArgumentException('minScore must be finite and within [0.0, 1.0].');
+        }
+        if ($expectedAction !== null && \trim($expectedAction) === '') {
+            throw new \InvalidArgumentException('expectedAction cannot be an empty string.');
+        }
+        if ($expectedHostname !== null && \trim($expectedHostname) === '') {
+            throw new \InvalidArgumentException('expectedHostname cannot be an empty string.');
+        }
         $this->logger = $logger ?? new NullLogger();
     }
 
@@ -103,11 +123,7 @@ final class Captcha implements CaptchaVerifierInterface
         if ($error !== null) {
             $transportInfo = $response->getInfo();
 
-            // HttpResponseInterface::getError() is free text (e.g. curl_strerror()'s
-            // output), not a structured error code — rafalmasiarek/http-client doesn't
-            // expose one today. Matching "timed out" against curl's own stable English
-            // error strings is a best-effort heuristic, not a guarantee.
-            if (\stripos($error, 'timed out') !== false || \stripos($error, 'timeout') !== false) {
+            if ($response->getErrorKind() === TransportErrorKind::Timeout) {
                 $this->log('warning', 'captcha.verify.timeout', ['error' => $error]);
                 throw new CaptchaTimeoutException("Timed out verifying against {$endpoint}: {$error}", $transportInfo);
             }
@@ -131,12 +147,24 @@ final class Captcha implements CaptchaVerifierInterface
             }
         }
 
-        $apiSuccess = (bool) ($data['success'] ?? false);
-        $score = isset($data['score']) ? (float) $data['score'] : null;
-        $action = isset($data['action']) ? (string) $data['action'] : null;
+        if (\array_key_exists('success', $data) && !\is_bool($data['success'])) {
+            $this->logInvalidResponse($response->getStatusCode(), 'success');
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"success\" is not a boolean", $response->getStatusCode());
+        }
+        $apiSuccess = $data['success'] ?? false;
 
-        $scoreOk = $this->minScore === null || $score === null || $score >= $this->minScore;
-        $actionOk = $this->expectedAction === null || $action === null || $action === $this->expectedAction;
+        $score = $this->extractScore($data, $endpoint, $response->getStatusCode());
+        $action = $this->extractStringField($data, 'action', $endpoint, $response->getStatusCode());
+        $hostname = $this->extractStringField($data, 'hostname', $endpoint, $response->getStatusCode());
+
+        // challenge_ts is purely informational (never used in a security decision below) —
+        // coerced leniently rather than rejecting the whole response over a cosmetic field.
+        $challengeTsRaw = $data['challenge_ts'] ?? null;
+        $challengeTs = \is_scalar($challengeTsRaw) ? (string) $challengeTsRaw : null;
+
+        $scoreOk = $this->minScore === null || ($score !== null && $score >= $this->minScore);
+        $actionOk = $this->expectedAction === null || ($action !== null && $action === $this->expectedAction);
+        $hostnameOk = $this->expectedHostname === null || ($hostname !== null && $hostname === $this->expectedHostname);
 
         if (!$scoreOk && !\in_array(CaptchaErrorCategory::ScoreTooLow, $categories, true)) {
             $categories[] = CaptchaErrorCategory::ScoreTooLow;
@@ -144,15 +172,18 @@ final class Captcha implements CaptchaVerifierInterface
         if (!$actionOk && !\in_array(CaptchaErrorCategory::ActionMismatch, $categories, true)) {
             $categories[] = CaptchaErrorCategory::ActionMismatch;
         }
+        if (!$hostnameOk && !\in_array(CaptchaErrorCategory::HostnameMismatch, $categories, true)) {
+            $categories[] = CaptchaErrorCategory::HostnameMismatch;
+        }
 
         $result = new CaptchaResult(
-            success: $apiSuccess && $scoreOk && $actionOk,
+            success: $apiSuccess && $scoreOk && $actionOk && $hostnameOk,
             score: $score,
             action: $action,
             errorCodes: $rawCodes,
             errorCategories: $categories,
-            challengeTs: isset($data['challenge_ts']) ? (string) $data['challenge_ts'] : null,
-            hostname: isset($data['hostname']) ? (string) $data['hostname'] : null,
+            challengeTs: $challengeTs,
+            hostname: $hostname,
             raw: $data,
         );
 
@@ -165,6 +196,68 @@ final class Captcha implements CaptchaVerifierInterface
         }
 
         return $result;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param string $endpoint
+     * @param int $statusCode
+     *
+     * @return float|null Null when absent; validated finite and within [0.0, 1.0] otherwise.
+     *
+     * @throws CaptchaResponseException When present but not a finite number within [0.0, 1.0].
+     */
+    private function extractScore(array $data, string $endpoint, int $statusCode): ?float
+    {
+        if (!\array_key_exists('score', $data) || $data['score'] === null) {
+            return null;
+        }
+
+        $raw = $data['score'];
+        $isNumeric = \is_int($raw) || \is_float($raw) || (\is_string($raw) && \is_numeric($raw));
+        $score = $isNumeric ? (float) $raw : \NAN;
+
+        if (!$isNumeric || !\is_finite($score) || $score < 0.0 || $score > 1.0) {
+            $this->logInvalidResponse($statusCode, 'score');
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"score\" is not a finite number within [0.0, 1.0]", $statusCode);
+        }
+
+        return $score;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param string $field
+     * @param string $endpoint
+     * @param int $statusCode
+     *
+     * @return string|null Null when absent.
+     *
+     * @throws CaptchaResponseException When present but not a string.
+     */
+    private function extractStringField(array $data, string $field, string $endpoint, int $statusCode): ?string
+    {
+        if (!\array_key_exists($field, $data) || $data[$field] === null) {
+            return null;
+        }
+
+        if (!\is_string($data[$field])) {
+            $this->logInvalidResponse($statusCode, $field);
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"{$field}\" is not a string", $statusCode);
+        }
+
+        return $data[$field];
+    }
+
+    /**
+     * @param int $statusCode
+     * @param string $field
+     *
+     * @return void
+     */
+    private function logInvalidResponse(int $statusCode, string $field): void
+    {
+        $this->log('error', 'captcha.verify.invalid_response', ['status_code' => $statusCode, 'field' => $field]);
     }
 
     /**

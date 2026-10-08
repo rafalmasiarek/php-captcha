@@ -91,4 +91,18 @@ final class TurnstileProvider implements CaptchaProviderInterface
             default => CaptchaErrorCategory::Unknown,
         };
     }
+
+    /**
+     * Widget metadata for the visible Turnstile checkbox.
+     *
+     * @return CaptchaWidgetDescriptor
+     */
+    public static function widget(): CaptchaWidgetDescriptor
+    {
+        return new CaptchaWidgetDescriptor(
+            scriptUrl: 'https://challenges.cloudflare.com/turnstile/v0/api.js',
+            widgetCssClass: 'cf-turnstile',
+            tokenFieldName: 'cf-turnstile-response',
+        );
+    }
 }
