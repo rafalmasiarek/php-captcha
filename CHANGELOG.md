@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/rafalmasiarek/php-captcha/compare/v2.0.0...v2.0.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* harden response validation, drop unsafe v3 fallback ([7949e30](https://github.com/rafalmasiarek/php-captcha/commit/7949e305574976a82e7cd87db5ea924890e8523c))
+
 ## [2.0.0](https://github.com/rafalmasiarek/php-captcha/compare/v1.0.0...v2.0.0) (2026-10-08)
 
 
