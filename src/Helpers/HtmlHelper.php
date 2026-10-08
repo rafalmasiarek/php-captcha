@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace rafalmasiarek\Captcha\Helpers;
 
+use rafalmasiarek\Captcha\Helpers\InvisibleGlue\InvisibleWidgetGlueRegistry;
 use rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant;
 
 /**
- * Generic (template-engine-agnostic) HTML/JS helper for rendering a CAPTCHA
- * widget — no dependency on Twig, Blade, Plates, or anything else. Framework
- * wrappers (e.g. Helpers\Twig\CaptchaExtension) delegate to this class; a
- * caller with no template engine at all can call it directly.
+ * Template-engine-agnostic HTML/JS helper for rendering a CAPTCHA widget.
+ * Holds no provider knowledge — invisible-widget JS is delegated to
+ * InvisibleWidgetGlueRegistry. Framework wrappers (e.g.
+ * Helpers\Twig\CaptchaExtension) delegate here; usable directly with no
+ * template engine.
  *
  * @package rafalmasiarek\Captcha\Helpers
  */
@@ -132,11 +134,6 @@ final class HtmlHelper
     }
 
     /**
-     * The grecaptcha.ready()/execute() JS call below is reCAPTCHA v3's own API —
-     * correct today only because RecaptchaV3 is the sole isInvisible() variant.
-     * A future invisible variant from another provider would need its own
-     * glue script here, keyed off $variant.
-     *
      * @param CaptchaWidgetVariant $variant
      * @param string $siteKey
      * @param string $action
@@ -145,30 +142,14 @@ final class HtmlHelper
      */
     private static function invisibleScripts(CaptchaWidgetVariant $variant, string $siteKey, string $action): string
     {
+        $glue = InvisibleWidgetGlueRegistry::for($variant);
+
         $siteKeyJs = \json_encode($siteKey, \JSON_UNESCAPED_SLASHES);
         $actionJs  = \json_encode($action, \JSON_UNESCAPED_SLASHES);
 
-        $script = self::minifyInlineJs(<<<JS
-        (function () {
-            var el   = document.querySelector('.js-captcha-invisible');
-            var form = el ? el.closest('form') : null;
-            if (!form) return;
+        $script = self::minifyInlineJs($glue->glueJs($siteKeyJs, $actionJs));
 
-            form.addEventListener('submit', function (e) {
-                e.preventDefault();
-                grecaptcha.ready(function () {
-                    grecaptcha.execute({$siteKeyJs}, { action: {$actionJs} }).then(function (token) {
-                        el.value = token;
-                        form.submit();
-                    });
-                });
-            });
-        }());
-        JS);
-
-        $scriptUrl = $variant->scriptUrl() . '?render=' . \rawurlencode($siteKey);
-
-        return '<script src="' . \htmlspecialchars($scriptUrl, \ENT_QUOTES) . '"></script>'
+        return '<script src="' . \htmlspecialchars($glue->scriptUrl($siteKey), \ENT_QUOTES) . '"></script>'
             . '<script>' . $script . '</script>';
     }
 
