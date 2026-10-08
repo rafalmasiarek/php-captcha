@@ -159,13 +159,36 @@ Verification stays provider-agnostic and renders nothing — but a small, genuin
 
 None of Twig/Laravel/Plates is declared anywhere in `composer.json` — not even in `suggest` — matching `rafalmasiarek/csrf-token`'s own convention exactly. These classes are never autoloaded unless a consumer actually references them, so the corresponding package is never required just because the file exists; a consumer who wants one of these helpers already has that template engine in their own project.
 
+### Plain PHP — no template engine at all
+
+`HtmlHelper` is just two static methods returning strings; nothing about it requires Twig/Blade/Plates or any rendering framework. This is the entire integration in a bare `.php` view, or even built inline in a controller:
+
 ```php
+<?php
 use rafalmasiarek\Captcha\Helpers\HtmlHelper;
 use rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant;
 
-echo HtmlHelper::widget(CaptchaWidgetVariant::Turnstile, $siteKey);
-echo HtmlHelper::scripts(CaptchaWidgetVariant::Turnstile, $siteKey);
+$variant = CaptchaWidgetVariant::Turnstile;
+?>
+<form method="post" action="/login">
+    <input type="text" name="username">
+    <input type="password" name="password">
+
+    <?= HtmlHelper::widget($variant, $siteKey) ?>
+
+    <button type="submit">Log in</button>
+</form>
+<?= HtmlHelper::scripts($variant, $siteKey) ?>
 ```
+
+On the receiving end, read the token back out under the field name the variant itself reports — no hardcoded `'g-recaptcha-response'`/`'cf-turnstile-response'`/`'h-captcha-response'` anywhere in your code:
+
+```php
+$token = $_POST[$variant->tokenFieldName()] ?? '';
+$result = $captcha->verify($token, $remoteIp);
+```
+
+### With a template engine
 
 ```twig
 {# with Helpers\Twig\CaptchaExtension registered #}
