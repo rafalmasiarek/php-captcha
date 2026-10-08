@@ -145,7 +145,7 @@ Two independent axes:
 - **Did the call itself fail?** (`CaptchaVerificationException` and its subtypes `CaptchaTimeoutException` / `CaptchaTransportException` — both carry `$transportInfo`, a snapshot of `HttpResponseInterface::getInfo()` for diagnostics — and `CaptchaResponseException`, which carries `$statusCode`.) A network/parsing problem, never thrown for a legitimately rejected token.
 - **Why was a token rejected?** `CaptchaResult::$errorCategories` (provider-agnostic) and `$errorCodes` (raw) — a normal, successfully-completed call that reports `success: false`.
 
-Timeout detection matches `HttpResponseInterface::getError()`'s free-text message against curl's own stable English error strings — `rafalmasiarek/http-client` doesn't expose a structured transport-error code today, so this is a best-effort heuristic, not a guarantee.
+Timeout detection checks `HttpResponseInterface::getErrorKind() === TransportErrorKind::Timeout` — a structured classification `rafalmasiarek/http-client` computes from curl's own error code, not a string match against `getError()`'s free-text message.
 
 ## Optional widget-rendering helpers
 

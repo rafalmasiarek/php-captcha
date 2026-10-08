@@ -9,6 +9,7 @@ use Psr\Log\NullLogger;
 use rafalmasiarek\DnsResolver\SystemDnsResolver;
 use rafalmasiarek\HttpClient\Http\CurlHttpClient;
 use rafalmasiarek\HttpClient\Http\HttpClientInterface;
+use rafalmasiarek\HttpClient\Http\TransportErrorKind;
 
 /**
  * Verifies a CAPTCHA token against any provider that follows the
@@ -103,11 +104,7 @@ final class Captcha implements CaptchaVerifierInterface
         if ($error !== null) {
             $transportInfo = $response->getInfo();
 
-            // HttpResponseInterface::getError() is free text (e.g. curl_strerror()'s
-            // output), not a structured error code — rafalmasiarek/http-client doesn't
-            // expose one today. Matching "timed out" against curl's own stable English
-            // error strings is a best-effort heuristic, not a guarantee.
-            if (\stripos($error, 'timed out') !== false || \stripos($error, 'timeout') !== false) {
+            if ($response->getErrorKind() === TransportErrorKind::Timeout) {
                 $this->log('warning', 'captcha.verify.timeout', ['error' => $error]);
                 throw new CaptchaTimeoutException("Timed out verifying against {$endpoint}: {$error}", $transportInfo);
             }
