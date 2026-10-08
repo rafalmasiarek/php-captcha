@@ -91,32 +91,13 @@ final class RecaptchaProvider implements CaptchaProviderInterface
      * checkbox; extraJs carries the whole grecaptcha.ready()/execute()
      * (Promise-based) flow since there's no generic baseline for it.
      *
-     * The glue:
-     * - Uses form.requestSubmit() (not form.submit()) so native constraint
-     *   validation and the submit event still run on the real, final
-     *   submission — form.submit() bypasses both. Checks form.checkValidity()
-     *   BEFORE setting the "token ready" flag or calling requestSubmit(): if
-     *   validation would fail, requestSubmit() never dispatches a submit
-     *   event at all, so a flag set beforehand would otherwise sit stale on
-     *   the form and let a LATER, unrelated submit through without a fresh
-     *   token. Calls form.reportValidity() in that case to surface the
-     *   native validation errors.
-     * - Captures e.submitter before the async execute() call and replays
-     *   it into requestSubmit(), preserving submitter-dependent behavior
-     *   (name=value, formaction, ...) as far as requestSubmit supports.
-     * - The one-shot "ready" flag is a plain JS property namespaced by this
-     *   widget's own instance id (not a single shared form.dataset key) —
-     *   two invisible v3 widgets on the same form don't share or race on it.
-     * - Guards against a double-click firing execute() twice (pending flag)
-     *   and against grecaptcha.ready() never calling back (timeout resets
-     *   pending so a retry is always possible — no permanently stuck UI).
-     * - On timeout, a rejected execute(), or a thrown exception, dispatches
-     *   a bubbling "captcha:error" CustomEvent on the form (detail:
-     *   instanceId + reason) — a hook for the host app to show its own
-     *   message, without this library dictating how.
-     * - Falls back to form.submit() only when requestSubmit() genuinely
-     *   isn't supported, logging a console.warn so the degraded (no native
-     *   validation, no submit event) path is visible, not silent.
+     * Uses form.requestSubmit(), never form.submit() — the latter skips
+     * native validation and the submit event, which defeats the point.
+     * No requestSubmit() support reports "requestsubmit_unsupported" via
+     * captcha:error instead of degrading. The "ready" flag is set only
+     * right before requestSubmit() (after checkValidity() passes), so it
+     * never sits stale on the form for a later, unrelated submit to
+     * consume without a fresh token.
      *
      * @return CaptchaWidgetDescriptor
      */
@@ -170,22 +151,16 @@ final class RecaptchaProvider implements CaptchaProviderInterface
                                     pending = false;
                                     el.value = token;
 
-                                    if (typeof form.requestSubmit === 'function') {
-                                        if (form.checkValidity()) {
-                                            form[readyFlag] = true;
-                                            form.requestSubmit(submitter || undefined);
-                                        } else {
-                                            form.reportValidity();
-                                        }
+                                    if (typeof form.requestSubmit !== 'function') {
+                                        reportError('requestsubmit_unsupported');
+                                        return;
+                                    }
+
+                                    if (form.checkValidity()) {
+                                        form[readyFlag] = true;
+                                        form.requestSubmit(submitter || undefined);
                                     } else {
-                                        if (window.console && window.console.warn) {
-                                            window.console.warn(
-                                                'rafalmasiarek/captcha: form.requestSubmit() is not supported in ' +
-                                                'this browser; falling back to form.submit(), which skips native ' +
-                                                'validation and the submit event.'
-                                            );
-                                        }
-                                        form.submit();
+                                        form.reportValidity();
                                     }
                                 }).catch(function () {
                                     window.clearTimeout(timeout);
