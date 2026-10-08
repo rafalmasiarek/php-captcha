@@ -9,15 +9,15 @@ namespace rafalmasiarek\Captcha\Helpers\Blade;
  * directives — each simply echoes the corresponding HtmlHelper call with
  * whatever expression the template passed. No service resolution needed:
  * unlike a stateful service, HtmlHelper's methods take plain arguments
- * (a CaptchaWidgetVariant case + strings), nothing to resolve from a
+ * (a CaptchaWidgetDescriptor + strings), nothing to resolve from a
  * container.
  *
  * Usage:
  *   \rafalmasiarek\Captcha\Helpers\Blade\CaptchaBlade::register($bladeCompiler);
  *
  * Template usage:
- *   @captchaWidget($variant, $siteKey)
- *   @captchaScripts($variant, $siteKey)
+ *   @captchaWidget($widget, $siteKey)
+ *   @captchaScripts($widget, $siteKey)
  *
  * @package rafalmasiarek\Captcha\Helpers\Blade
  */

@@ -13,8 +13,8 @@ Deliberately out of scope: widget rendering (script URLs, `data-*` attributes, t
 ## Namespace layout
 
 - `rafalmasiarek\Captcha\*` — `Captcha` itself, `CaptchaProviderInterface`, `CaptchaResult`, `CaptchaErrorCategory`, `RemoteIpProviderInterface`/`SystemRemoteIpProvider`, and the exception hierarchy. Knows the *siteverify protocol shape*, but no specific vendor by name.
-- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaProvider`, `TurnstileProvider`, `HCaptchaProvider`), each one's own fully self-contained error-code enum (`RecaptchaErrorCode`, `TurnstileErrorCode`, `HCaptchaErrorCode`), and `CaptchaWidgetVariant` (raw widget metadata — see below). These are the only classes that know a vendor's name, endpoint, or exact error-code vocabulary.
-- `rafalmasiarek\Captcha\Helpers\*` — entirely optional widget-rendering helpers (see below). Verification never depends on this namespace.
+- `rafalmasiarek\Captcha\Provider\*` — the three built-in providers (`RecaptchaProvider`, `TurnstileProvider`, `HCaptchaProvider`), each one's own fully self-contained error-code enum (`RecaptchaErrorCode`, `TurnstileErrorCode`, `HCaptchaErrorCode`), and `CaptchaWidgetDescriptor` (raw widget metadata — see below). These are the only classes that know a vendor's name, endpoint, or exact error-code vocabulary. Each provider builds its own widget descriptor(s) directly — nothing central to edit when adding a new one.
+- `rafalmasiarek\Captcha\Helpers\*` — entirely optional widget-rendering helpers (see below). Verification itself (`endpoint()`/`secretKey()`/`extraParams()`/`classifyErrorCode()`) never depends on this namespace; only a provider's opt-in `widget*()` factory method does, for the rare case of an invisible widget (see `InvisibleGlue\`).
 - An entirely custom provider that doesn't follow the siteverify protocol at all implements `CaptchaVerifierInterface` directly, bypassing `Captcha`/`CaptchaProviderInterface` entirely.
 
 ## Install
@@ -149,15 +149,25 @@ Timeout detection checks `HttpResponseInterface::getErrorKind() === TransportErr
 
 ## Optional widget-rendering helpers
 
-Verification stays provider-agnostic and renders nothing — but a small, genuinely optional `Helpers\` layer ships alongside it for the common case of actually drawing the widget, mirroring the pattern used by [`rafalmasiarek/csrf-token`](https://github.com/rafalmasiarek/php-csrf)'s own `Helpers\`. None of this namespace is required by, or referenced from, anything under `Provider\` or the core — it's purely additive.
+Verification stays provider-agnostic and renders nothing — but a small, genuinely optional `Helpers\` layer ships alongside it for the common case of actually drawing the widget, mirroring the pattern used by [`rafalmasiarek/csrf-token`](https://github.com/rafalmasiarek/php-csrf)'s own `Helpers\`. `HtmlHelper` and the template-engine wrappers hold no provider knowledge at all — the only link back is a provider's own opt-in `widget*()` method referencing its matching class under `Helpers\InvisibleGlue\`, when it needs one.
 
-- `Provider\CaptchaWidgetVariant` — raw data only (script URL, widget CSS class, whether it's invisible, token field name) for the four distinct widget shapes (`RecaptchaV2`, `RecaptchaV3`, `Turnstile`, `HCaptcha` — note v2/v3 render completely differently client-side despite both verifying through the same `RecaptchaProvider`). No HTML/JS here.
+- `Provider\CaptchaWidgetDescriptor` — raw widget data (script URL, CSS class, token field name, optional invisible-mode glue). Each provider builds its own: `RecaptchaProvider::widgetV2()`/`::widgetV3()`, `TurnstileProvider::widget()`, `HCaptchaProvider::widget()`. Adding a new provider needs no change outside its own file — not even here.
 - `Helpers\HtmlHelper` — template-engine-agnostic: `widget()`/`scripts()` return plain HTML strings. Zero dependency on any template engine; call it directly from raw PHP.
 - `Helpers\Twig\CaptchaExtension` — Twig extension exposing `captcha_widget()`/`captcha_scripts()` Twig functions.
 - `Helpers\Blade\CaptchaBlade::register($bladeCompiler)` — registers `@captchaWidget(...)`/`@captchaScripts(...)` Blade directives.
 - `Helpers\Plates\CaptchaExtension::register($engine)` — registers `captcha_widget()`/`captcha_scripts()` Plates template functions.
 
 None of Twig/Laravel/Plates is declared anywhere in `composer.json` — not even in `suggest` — matching `rafalmasiarek/csrf-token`'s own convention exactly. These classes are never autoloaded unless a consumer actually references them, so the corresponding package is never required just because the file exists; a consumer who wants one of these helpers already has that template engine in their own project.
+
+### Adding a new provider
+
+A new provider is self-contained — nothing outside its own file(s) needs editing:
+
+1. `Provider\MyProvider implements CaptchaProviderInterface` — verification (`endpoint()`/`secretKey()`/`extraParams()`/`classifyErrorCode()`/`defaultTokenFieldName()`), plus a `widget()` (or `widgetX()` per variant, like `RecaptchaProvider`) static method returning a `CaptchaWidgetDescriptor`.
+2. `Provider\MyProviderErrorCode` — that provider's own raw error-code enum, consumed only by `MyProvider::classifyErrorCode()`.
+3. `Helpers\InvisibleGlue\MyProviderGlue implements InvisibleWidgetGlueInterface` — only if the widget has no checkbox (pass it into the `CaptchaWidgetDescriptor`'s `invisibleGlue` param). Skip this file entirely for a visible widget.
+
+`HtmlHelper` and every template-engine wrapper consume `CaptchaWidgetDescriptor` generically — they never enumerate providers, so none of them needs touching.
 
 ### Plain PHP — no template engine at all
 
@@ -166,25 +176,25 @@ None of Twig/Laravel/Plates is declared anywhere in `composer.json` — not even
 ```php
 <?php
 use rafalmasiarek\Captcha\Helpers\HtmlHelper;
-use rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant;
+use rafalmasiarek\Captcha\Provider\TurnstileProvider;
 
-$variant = CaptchaWidgetVariant::Turnstile;
+$widget = TurnstileProvider::widget();
 ?>
 <form method="post" action="/login">
     <input type="text" name="username">
     <input type="password" name="password">
 
-    <?= HtmlHelper::widget($variant, $siteKey) ?>
+    <?= HtmlHelper::widget($widget, $siteKey) ?>
 
     <button type="submit">Log in</button>
 </form>
-<?= HtmlHelper::scripts($variant, $siteKey) ?>
+<?= HtmlHelper::scripts($widget, $siteKey) ?>
 ```
 
-On the receiving end, read the token back out under the field name the variant itself reports — no hardcoded `'g-recaptcha-response'`/`'cf-turnstile-response'`/`'h-captcha-response'` anywhere in your code:
+On the receiving end, read the token back out under the field name the widget itself reports — no hardcoded `'g-recaptcha-response'`/`'cf-turnstile-response'`/`'h-captcha-response'` anywhere in your code:
 
 ```php
-$token = $_POST[$variant->tokenFieldName()] ?? '';
+$token = $_POST[$widget->tokenFieldName] ?? '';
 $result = $captcha->verify($token, $remoteIp);
 ```
 
@@ -192,20 +202,20 @@ $result = $captcha->verify($token, $remoteIp);
 
 ```twig
 {# with Helpers\Twig\CaptchaExtension registered #}
-{{ captcha_widget(variant, siteKey) }}
-{{ captcha_scripts(variant, siteKey) }}
+{{ captcha_widget(widget, siteKey) }}
+{{ captcha_scripts(widget, siteKey) }}
 ```
 
 ```blade
 {{-- with Helpers\Blade\CaptchaBlade::register($bladeCompiler) called --}}
-@captchaWidget($variant, $siteKey)
-@captchaScripts($variant, $siteKey)
+@captchaWidget($widget, $siteKey)
+@captchaScripts($widget, $siteKey)
 ```
 
 ```php
 <?php // with Helpers\Plates\CaptchaExtension::register($engine) called ?>
-<?= $this->captcha_widget($variant, $siteKey) ?>
-<?= $this->captcha_scripts($variant, $siteKey) ?>
+<?= $this->captcha_widget($widget, $siteKey) ?>
+<?= $this->captcha_scripts($widget, $siteKey) ?>
 ```
 
 ## Testing with official test keys

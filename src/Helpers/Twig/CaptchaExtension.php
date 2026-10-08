@@ -9,17 +9,16 @@ use Twig\Extension\AbstractExtension;
 use Twig\TwigFunction;
 
 /**
- * Twig extension providing {{ captcha_widget(variant, siteKey) }} and
- * {{ captcha_scripts(variant, siteKey, action) }} — thin wrappers around
+ * Twig extension providing {{ captcha_widget(widget, siteKey) }} and
+ * {{ captcha_scripts(widget, siteKey, action) }} — thin wrappers around
  * HtmlHelper, which has no Twig dependency of its own. Not autoloaded by
  * anything in this package unless a consumer actually instantiates it, so
  * twig/twig is never required just because this file exists — a consumer
  * who wants it already has Twig in their own project.
  *
- * $variant is a rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant case,
- * passed into the template context by the caller (e.g.
- * CaptchaWidgetVariant::RecaptchaV2) — Twig renders it like any other
- * context variable.
+ * $widget is a rafalmasiarek\Captcha\Provider\CaptchaWidgetDescriptor, built
+ * by the Provider in use (e.g. RecaptchaProvider::widgetV2()) and passed
+ * into the template context by the caller.
  *
  * @package rafalmasiarek\Captcha\Helpers\Twig
  */

@@ -4,25 +4,23 @@ declare(strict_types=1);
 
 namespace rafalmasiarek\Captcha\Helpers;
 
-use rafalmasiarek\Captcha\Helpers\InvisibleGlue\InvisibleWidgetGlueRegistry;
-use rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant;
+use rafalmasiarek\Captcha\Provider\CaptchaWidgetDescriptor;
 
 /**
  * Template-engine-agnostic HTML/JS helper for rendering a CAPTCHA widget.
- * Holds no provider knowledge — invisible-widget JS is delegated to
- * InvisibleWidgetGlueRegistry. Framework wrappers (e.g.
- * Helpers\Twig\CaptchaExtension) delegate here; usable directly with no
- * template engine.
+ * Holds no provider knowledge — takes a CaptchaWidgetDescriptor built by the
+ * Provider class in use (e.g. RecaptchaProvider::widgetV2()). Framework
+ * wrappers (e.g. Helpers\Twig\CaptchaExtension) delegate here; usable
+ * directly with no template engine.
  *
  * @package rafalmasiarek\Captcha\Helpers
  */
 final class HtmlHelper
 {
     /**
-     * Widget markup: a visible checkbox div for RecaptchaV2/Turnstile/
-     * HCaptcha, or a hidden input for the invisible RecaptchaV3.
+     * Widget markup: a visible checkbox div, or a hidden input when $widget is invisible.
      *
-     * @param CaptchaWidgetVariant $variant
+     * @param CaptchaWidgetDescriptor $widget
      * @param string $siteKey
      * @param string $successCallback JS global function name called when solved.
      * @param string $expiredCallback JS global function name called when expired.
@@ -30,17 +28,17 @@ final class HtmlHelper
      * @return string
      */
     public static function widget(
-        CaptchaWidgetVariant $variant,
+        CaptchaWidgetDescriptor $widget,
         string $siteKey,
         string $successCallback = 'captchaSuccess',
         string $expiredCallback = 'captchaExpired',
     ): string {
-        if ($variant->isInvisible()) {
-            return '<input type="hidden" name="' . \htmlspecialchars($variant->tokenFieldName(), \ENT_QUOTES)
+        if ($widget->isInvisible()) {
+            return '<input type="hidden" name="' . \htmlspecialchars($widget->tokenFieldName, \ENT_QUOTES)
                 . '" class="js-captcha-invisible">';
         }
 
-        return '<div class="' . \htmlspecialchars((string) $variant->widgetCssClass(), \ENT_QUOTES) . ' js-captcha"'
+        return '<div class="' . \htmlspecialchars((string) $widget->widgetCssClass, \ENT_QUOTES) . ' js-captcha"'
             . ' data-sitekey="' . \htmlspecialchars($siteKey, \ENT_QUOTES) . '"'
             . ' data-callback="' . \htmlspecialchars($successCallback, \ENT_QUOTES) . '"'
             . ' data-expired-callback="' . \htmlspecialchars($expiredCallback, \ENT_QUOTES) . '"></div>';
@@ -48,38 +46,38 @@ final class HtmlHelper
 
     /**
      * <script> tags: the official widget script plus an inline glue script —
-     * button-disable-until-solved for a visible variant, intercept-submit-
-     * and-execute for the invisible one.
+     * button-disable-until-solved for a visible widget, intercept-submit-
+     * and-execute for an invisible one.
      *
-     * @param CaptchaWidgetVariant $variant
+     * @param CaptchaWidgetDescriptor $widget
      * @param string $siteKey
-     * @param string $action reCAPTCHA v3 only; ignored by every other variant.
+     * @param string $action Only meaningful when $widget is invisible; ignored otherwise.
      * @param string $successCallback Must match widget()'s $successCallback.
      * @param string $expiredCallback Must match widget()'s $expiredCallback.
      *
      * @return string
      */
     public static function scripts(
-        CaptchaWidgetVariant $variant,
+        CaptchaWidgetDescriptor $widget,
         string $siteKey,
         string $action = '',
         string $successCallback = 'captchaSuccess',
         string $expiredCallback = 'captchaExpired',
     ): string {
-        return $variant->isInvisible()
-            ? self::invisibleScripts($variant, $siteKey, $action)
-            : self::visibleScripts($variant, $successCallback, $expiredCallback);
+        return $widget->isInvisible()
+            ? self::invisibleScripts($widget, $siteKey, $action)
+            : self::visibleScripts($widget, $successCallback, $expiredCallback);
     }
 
     /**
-     * @param CaptchaWidgetVariant $variant
+     * @param CaptchaWidgetDescriptor $widget
      * @param string $successCallback
      * @param string $expiredCallback
      *
      * @return string
      */
     private static function visibleScripts(
-        CaptchaWidgetVariant $variant,
+        CaptchaWidgetDescriptor $widget,
         string $successCallback,
         string $expiredCallback,
     ): string {
@@ -129,20 +127,23 @@ final class HtmlHelper
         }());
         JS);
 
-        return '<script src="' . \htmlspecialchars($variant->scriptUrl(), \ENT_QUOTES) . '" async defer></script>'
+        return '<script src="' . \htmlspecialchars($widget->scriptUrl, \ENT_QUOTES) . '" async defer></script>'
             . '<script>' . $script . '</script>';
     }
 
     /**
-     * @param CaptchaWidgetVariant $variant
+     * @param CaptchaWidgetDescriptor $widget
      * @param string $siteKey
      * @param string $action
      *
      * @return string
      */
-    private static function invisibleScripts(CaptchaWidgetVariant $variant, string $siteKey, string $action): string
+    private static function invisibleScripts(CaptchaWidgetDescriptor $widget, string $siteKey, string $action): string
     {
-        $glue = InvisibleWidgetGlueRegistry::for($variant);
+        $glue = $widget->invisibleGlue;
+        if ($glue === null) {
+            throw new \LogicException('invisibleScripts() called with a widget that has no invisibleGlue.');
+        }
 
         $siteKeyJs = \json_encode($siteKey, \JSON_UNESCAPED_SLASHES);
         $actionJs  = \json_encode($action, \JSON_UNESCAPED_SLASHES);

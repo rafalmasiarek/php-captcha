@@ -6,7 +6,7 @@ namespace rafalmasiarek\Captcha\Helpers\Plates;
 
 use League\Plates\Engine;
 use rafalmasiarek\Captcha\Helpers\HtmlHelper;
-use rafalmasiarek\Captcha\Provider\CaptchaWidgetVariant;
+use rafalmasiarek\Captcha\Provider\CaptchaWidgetDescriptor;
 
 /**
  * Plates extension exposing captcha_widget() and captcha_scripts() template
@@ -33,25 +33,25 @@ final class CaptchaExtension
         $engine->registerFunction(
             'captcha_widget',
             static function (
-                CaptchaWidgetVariant $variant,
+                CaptchaWidgetDescriptor $widget,
                 string $siteKey,
                 string $successCallback = 'captchaSuccess',
                 string $expiredCallback = 'captchaExpired',
             ): string {
-                return HtmlHelper::widget($variant, $siteKey, $successCallback, $expiredCallback);
+                return HtmlHelper::widget($widget, $siteKey, $successCallback, $expiredCallback);
             }
         );
 
         $engine->registerFunction(
             'captcha_scripts',
             static function (
-                CaptchaWidgetVariant $variant,
+                CaptchaWidgetDescriptor $widget,
                 string $siteKey,
                 string $action = '',
                 string $successCallback = 'captchaSuccess',
                 string $expiredCallback = 'captchaExpired',
             ): string {
-                return HtmlHelper::scripts($variant, $siteKey, $action, $successCallback, $expiredCallback);
+                return HtmlHelper::scripts($widget, $siteKey, $action, $successCallback, $expiredCallback);
             }
         );
     }

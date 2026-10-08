@@ -79,4 +79,18 @@ final class HCaptchaProvider implements CaptchaProviderInterface
             default => CaptchaErrorCategory::Unknown,
         };
     }
+
+    /**
+     * Widget metadata for the visible hCaptcha checkbox.
+     *
+     * @return CaptchaWidgetDescriptor
+     */
+    public static function widget(): CaptchaWidgetDescriptor
+    {
+        return new CaptchaWidgetDescriptor(
+            scriptUrl: 'https://js.hcaptcha.com/1/api.js',
+            widgetCssClass: 'h-captcha',
+            tokenFieldName: 'h-captcha-response',
+        );
+    }
 }
