@@ -65,7 +65,7 @@ final class HtmlHelper
         string $expiredCallback = 'captchaExpired',
     ): string {
         return $variant->isInvisible()
-            ? self::invisibleScripts($siteKey, $action)
+            ? self::invisibleScripts($variant, $siteKey, $action)
             : self::visibleScripts($variant, $successCallback, $expiredCallback);
     }
 
@@ -132,12 +132,18 @@ final class HtmlHelper
     }
 
     /**
+     * The grecaptcha.ready()/execute() JS call below is reCAPTCHA v3's own API —
+     * correct today only because RecaptchaV3 is the sole isInvisible() variant.
+     * A future invisible variant from another provider would need its own
+     * glue script here, keyed off $variant.
+     *
+     * @param CaptchaWidgetVariant $variant
      * @param string $siteKey
      * @param string $action
      *
      * @return string
      */
-    private static function invisibleScripts(string $siteKey, string $action): string
+    private static function invisibleScripts(CaptchaWidgetVariant $variant, string $siteKey, string $action): string
     {
         $siteKeyJs = \json_encode($siteKey, \JSON_UNESCAPED_SLASHES);
         $actionJs  = \json_encode($action, \JSON_UNESCAPED_SLASHES);
@@ -160,7 +166,9 @@ final class HtmlHelper
         }());
         JS);
 
-        return '<script src="https://www.google.com/recaptcha/api.js?render=' . \rawurlencode($siteKey) . '"></script>'
+        $scriptUrl = $variant->scriptUrl() . '?render=' . \rawurlencode($siteKey);
+
+        return '<script src="' . \htmlspecialchars($scriptUrl, \ENT_QUOTES) . '"></script>'
             . '<script>' . $script . '</script>';
     }
 
