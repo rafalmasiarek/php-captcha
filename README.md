@@ -210,6 +210,29 @@ HtmlHelper::scripts($widget, $siteKey, nonce: $cspNonceForThisRequest);
 
 You still need to allow the provider's own script domain (`www.google.com`, `challenges.cloudflare.com`, `js.hcaptcha.com`) in your `script-src` directive — a nonce on your own tags doesn't relax that. Different providers' widgets may make further same-origin/frame-ancestors demands of their own (e.g. `frame-src`); consult each vendor's own CSP guidance. `'unsafe-inline'` is never the answer this library suggests.
 
+### Reacting to a client-side failure: the `captcha:error` event
+
+A provider's own glue JS can fail client-side in ways the server never sees — a timeout waiting for the widget's own `.execute()`-style call, that call rejecting, or an unexpected exception (currently emitted by `RecaptchaProvider::widgetV3()`'s invisible-widget flow; any provider's `extraJs` can dispatch the same event the same way). Rather than this library deciding how your app should surface that, it dispatches one generic, bubbling `CustomEvent`:
+
+```js
+document.addEventListener('captcha:error', function (e) {
+    // e.detail.instanceId — the widget's instanceId (see "Multiple widgets" above)
+    // e.detail.reason     — 'timeout' | 'execute_failed' | 'exception'
+    console.warn('CAPTCHA failed:', e.detail.instanceId, e.detail.reason);
+});
+```
+
+It's dispatched on the `<form>` element with `bubbles: true`, so one listener on `document` catches it for every widget on the page — no per-widget wiring needed. This is the one, generic hook; bridging it into your own error-reporting system (Bugsnag, Sentry, a homegrown one) is a few lines in your own JS, not something this library needs to know about:
+
+```js
+document.addEventListener('captcha:error', function (e) {
+    MyErrorReporter.report('CAPTCHA verification failed: ' + e.detail.reason, {
+        component: 'captcha',
+        metadata: { instanceId: e.detail.instanceId, reason: e.detail.reason }
+    });
+});
+```
+
 ### Adding a new provider
 
 A new provider is self-contained — nothing outside its own file(s) needs editing:
