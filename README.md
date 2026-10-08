@@ -107,10 +107,12 @@ $captcha->verify($token, $remoteIp);
 ### reCAPTCHA v3 / hCaptcha Enterprise score and action thresholds
 
 ```php
-$captcha = new Captcha($provider, minScore: 0.5, expectedAction: 'login');
+$captcha = new Captcha($provider, minScore: 0.5, expectedAction: 'login', expectedHostname: 'example.com');
 ```
 
-No-ops for a provider/mode that doesn't return a score or action (reCAPTCHA v2, Turnstile, standard hCaptcha) — `$result->success` folds in the threshold checks alongside the provider's own verdict, so a caller only ever needs to check one field.
+`$result->success` folds in every configured threshold check alongside the provider's own verdict, so a caller only ever needs to check one field. **Fails closed**: once `minScore`/`expectedAction`/`expectedHostname` is configured, a response that omits that field (or returns it as the wrong type) does **not** satisfy the check — it never silently passes just because the provider/mode didn't return it. Leave the corresponding parameter `null` for a provider/mode that genuinely never returns it (reCAPTCHA v2, Turnstile, standard hCaptcha) rather than configuring a check that can never pass.
+
+`minScore` is validated at construction time (must be finite, within `[0.0, 1.0]`); `expectedAction`/`expectedHostname` must not be empty strings. A malformed response — `score`/`action`/`hostname` present but the wrong type, or `score` outside `[0.0, 1.0]`, or `success` present but not a boolean — throws `CaptchaResponseException` rather than being silently coerced; `challenge_ts` is the one exception, coerced leniently since it's purely informational and never factors into `$result->success`.
 
 ### Provider-agnostic error categories
 
@@ -126,7 +128,10 @@ if (\in_array(CaptchaErrorCategory::TokenRejected, $result->errorCategories, tru
     // the token was legitimately rejected (expired, reused, malformed)
 }
 if (\in_array(CaptchaErrorCategory::ScoreTooLow, $result->errorCategories, true)) {
-    // passed the provider's own check, but didn't meet $minScore
+    // passed the provider's own check, but didn't meet $minScore (or the response omitted a score at all)
+}
+if (\in_array(CaptchaErrorCategory::HostnameMismatch, $result->errorCategories, true)) {
+    // didn't match $expectedHostname
 }
 ```
 
@@ -151,13 +156,59 @@ Timeout detection checks `HttpResponseInterface::getErrorKind() === TransportErr
 
 Verification stays provider-agnostic and renders nothing — but a small, genuinely optional `Helpers\` layer ships alongside it for the common case of actually drawing the widget, mirroring the pattern used by [`rafalmasiarek/csrf-token`](https://github.com/rafalmasiarek/php-csrf)'s own `Helpers\`. `HtmlHelper` holds no provider knowledge at all — it only ever reads generic data off `CaptchaWidgetDescriptor`.
 
-- `Provider\CaptchaWidgetDescriptor` — pure data (strings/arrays, no closures): script URL, CSS class, token field name, plus four generic, always-additive extension points any provider can fill in as needed — `scriptUrlParams` (extra query params on the script URL), `extraCssClasses`/`extraAttributes` (on the widget element), `extraHiddenFields` (extra hidden inputs), `extraJs` (extra inline JS, appended after the base glue). Values may contain the placeholders `{siteKey}`/`{action}` (raw) or `{siteKeyJs}`/`{actionJs}` (JSON-encoded, for JS source), substituted by `HtmlHelper` at render time. Each provider builds its own: `RecaptchaProvider::widgetV2()`/`::widgetV3()`, `TurnstileProvider::widget()`, `HCaptchaProvider::widget()`. Adding a new provider needs no change outside its own file — not even here.
-- `Helpers\HtmlHelper` — template-engine-agnostic: `widget()`/`scripts()` return plain HTML strings. Zero dependency on any template engine; call it directly from raw PHP.
+- `Provider\CaptchaWidgetDescriptor` — pure data (strings/arrays, no closures): script URL, CSS class, token field name, plus four generic, always-additive extension points any provider can fill in as needed — `scriptUrlParams` (extra query params on the script URL), `extraCssClasses`/`extraAttributes` (on the widget element — always applied, visible or invisible, no silently-ignored combination), `extraHiddenFields` (extra hidden inputs), `extraJs` (extra inline JS, appended after the base glue, each entry a complete, independent statement). Attribute/field names and CSS classes are validated at construction time — an unsafe name (e.g. an `on*` handler, or one of `HtmlHelper`'s own reserved attributes) throws `\InvalidArgumentException` immediately rather than silently rendering. Each provider builds its own: `RecaptchaProvider::widgetV2()`/`::widgetV3()`, `TurnstileProvider::widget()`, `HCaptchaProvider::widget()`. Adding a new provider needs no change outside its own file — not even here.
+- `Helpers\HtmlHelper` — template-engine-agnostic: `widget()`/`scripts()` return plain HTML strings. Zero dependency on any template engine, any CSS framework, or any JS minifier; call it directly from raw PHP.
 - `Helpers\Twig\CaptchaExtension` — Twig extension exposing `captcha_widget()`/`captcha_scripts()` Twig functions.
 - `Helpers\Blade\CaptchaBlade::register($bladeCompiler)` — registers `@captchaWidget(...)`/`@captchaScripts(...)` Blade directives.
 - `Helpers\Plates\CaptchaExtension::register($engine)` — registers `captcha_widget()`/`captcha_scripts()` Plates template functions.
 
 None of Twig/Laravel/Plates is declared anywhere in `composer.json` — not even in `suggest` — matching `rafalmasiarek/csrf-token`'s own convention exactly. These classes are never autoloaded unless a consumer actually references them, so the corresponding package is never required just because the file exists; a consumer who wants one of these helpers already has that template engine in their own project.
+
+### Placeholder tokens in `scriptUrlParams`/`extraJs`
+
+A provider's `widget()` method can reference the caller's eventual site key/action/instance id without knowing them yet, via tokens substituted by `HtmlHelper` at render time:
+
+| Token | Context | Form |
+|---|---|---|
+| `__CAPTCHA_SITE_KEY__` | `scriptUrlParams` only | raw, URL-encoded |
+| `__CAPTCHA_ACTION__` | `scriptUrlParams` only | raw, URL-encoded |
+| `__CAPTCHA_SITE_KEY_JS__` | `extraJs` only | JSON-encoded, `<script>`-safe |
+| `__CAPTCHA_ACTION_JS__` | `extraJs` only | JSON-encoded, `<script>`-safe |
+| `__CAPTCHA_INSTANCE_ID_JS__` | `extraJs` only | JSON-encoded, `<script>`-safe |
+
+The `__CAPTCHA_..._​__` shape (not `{name}`) is deliberate: it can't collide with ordinary JS object/block syntax, so an unrecognized or wrong-context token (a typo, or a JS token used inside `scriptUrlParams`) throws `\InvalidArgumentException` instead of silently passing through as garbage. JSON encoding for the `_JS` forms uses `JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT` — a value containing `</script>` or `<script>` can never prematurely terminate the surrounding `<script>` element.
+
+### Multiple widgets on one page
+
+Pass the **same** `$instanceId` to both the `widget()` and `scripts()` call for one widget, and a **distinct** one per widget when rendering more than one:
+
+```php
+<?= HtmlHelper::widget($widgetA, $siteKeyA, instanceId: 'login-form') ?>
+<?= HtmlHelper::scripts($widgetA, $siteKeyA, instanceId: 'login-form') ?>
+
+<?= HtmlHelper::widget($widgetB, $siteKeyB, instanceId: 'newsletter-form') ?>
+<?= HtmlHelper::scripts($widgetB, $siteKeyB, instanceId: 'newsletter-form') ?>
+```
+
+Every DOM lookup is scoped by `[data-captcha-instance="..."]`, and the default `successCallback`/`expiredCallback` window-global names are derived from `$instanceId` (`captchaSuccess_<id>`/`captchaExpired_<id>`) — two widgets never collide, even with every other parameter left at its default. `$instanceId` must match `/^[a-zA-Z0-9_-]+$/`; the single-widget-per-page case needs no `$instanceId` at all (defaults to `'default'`).
+
+### Styling feedback — no CSS framework assumed
+
+A visible widget's `scripts()` output never touches a submit button's `disabled` state (that stays entirely the host application's call) — instead it gates the form's `submit` event directly, and toggles a plain `.captcha-invalid` class on the widget element plus `hidden` on an adjacent `.captcha-feedback` element (`role="alert"`, `aria-live="assertive"`, linked via `aria-describedby`). Style both however you like; nothing here assumes Bootstrap or any other framework. The feedback text is a plain parameter, not hardcoded English:
+
+```php
+HtmlHelper::widget($widget, $siteKey, validationMessage: 'Proszę potwierdzić, że nie jesteś robotem.');
+```
+
+### Content Security Policy
+
+`scripts()` takes an optional `$nonce`, applied to both the vendor `<script src="...">` tag and the inline glue `<script>` tag:
+
+```php
+HtmlHelper::scripts($widget, $siteKey, nonce: $cspNonceForThisRequest);
+```
+
+You still need to allow the provider's own script domain (`www.google.com`, `challenges.cloudflare.com`, `js.hcaptcha.com`) in your `script-src` directive — a nonce on your own tags doesn't relax that. Different providers' widgets may make further same-origin/frame-ancestors demands of their own (e.g. `frame-src`); consult each vendor's own CSP guidance. `'unsafe-inline'` is never the answer this library suggests.
 
 ### Adding a new provider
 
@@ -166,7 +217,7 @@ A new provider is self-contained — nothing outside its own file(s) needs editi
 1. `Provider\MyProvider implements CaptchaProviderInterface` — verification (`endpoint()`/`secretKey()`/`extraParams()`/`classifyErrorCode()`/`defaultTokenFieldName()`), plus a `widget()` (or `widgetX()` per variant, like `RecaptchaProvider`) static method returning a `CaptchaWidgetDescriptor`.
 2. `Provider\MyProviderErrorCode` — that provider's own raw error-code enum, consumed only by `MyProvider::classifyErrorCode()`.
 
-That's it — always just those 2 files. A provider needing more than the generic declarative flow (official script + data-sitekey div) doesn't need a 3rd file or any new concept: it fills in `CaptchaWidgetDescriptor`'s `extraJs`/`scriptUrlParams`/etc. directly in its own `widget()` method. `RecaptchaProvider::widgetV3()` is the one built-in example — reCAPTCHA v3 has no checkbox (`widgetCssClass: null`) and must call `grecaptcha.execute()` itself, so its entire glue lives in `extraJs`, with `{siteKeyJs}`/`{actionJs}` placeholders.
+That's it — always just those 2 files. A provider needing more than the generic declarative flow (official script + data-sitekey div) doesn't need a 3rd file or any new concept: it fills in `CaptchaWidgetDescriptor`'s `extraJs`/`scriptUrlParams`/etc. directly in its own `widget()` method, using the placeholder tokens above. `RecaptchaProvider::widgetV3()` is the one built-in example — reCAPTCHA v3 has no checkbox (`widgetCssClass: null`) and must call `grecaptcha.execute()` itself, so its entire glue lives in `extraJs`, using `__CAPTCHA_SITE_KEY_JS__`/`__CAPTCHA_ACTION_JS__`/`__CAPTCHA_INSTANCE_ID_JS__`.
 
 `HtmlHelper` and every template-engine wrapper consume `CaptchaWidgetDescriptor` generically — they never enumerate providers, so none of them needs touching.
 
