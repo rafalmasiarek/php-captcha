@@ -32,6 +32,11 @@ namespace rafalmasiarek\Captcha\Provider;
  * HtmlHelper::ALLOWED_URL_TOKENS/ALLOWED_JS_TOKENS for which token is valid
  * in which field, and why (raw vs JSON-encoded, URL vs JS context).
  *
+ * A descriptor is trusted configuration — authored by the app developer's
+ * own Provider class, never built from end-user input — but every field is
+ * still validated at construction regardless, on the same "fail fast on an
+ * unsafe value" principle as the rest of this library.
+ *
  * @package rafalmasiarek\Captcha\Provider
  */
 final class CaptchaWidgetDescriptor
@@ -43,7 +48,7 @@ final class CaptchaWidgetDescriptor
     ];
 
     /**
-     * @param string $scriptUrl Absolute base <script src> URL.
+     * @param string $scriptUrl Absolute https:// <script src> URL for the generic declarative flow.
      * @param string|null $widgetCssClass CSS class the official script scans for, or null for no checkbox.
      * @param string $tokenFieldName HTML form field name this widget's token arrives under.
      * @param array<string,string> $scriptUrlParams Extra query params, merged onto $scriptUrl. May use
@@ -56,7 +61,9 @@ final class CaptchaWidgetDescriptor
      * @param list<string> $extraJs Extra inline JS, appended after the base glue. May use
      *                               HtmlHelper::ALLOWED_JS_TOKENS placeholders.
      *
-     * @throws \InvalidArgumentException When an attribute/class name is unsafe or reserved.
+     * @throws \InvalidArgumentException When $scriptUrl isn't an absolute https:// URL, when
+     *                                    $widgetCssClass/$tokenFieldName has an unsafe shape, or
+     *                                    when an attribute/class/field name is unsafe or reserved.
      */
     public function __construct(
         public readonly string $scriptUrl,
@@ -68,6 +75,14 @@ final class CaptchaWidgetDescriptor
         public readonly array $extraHiddenFields = [],
         public readonly array $extraJs = [],
     ) {
+        if (!\preg_match('#^https://[^\s]+$#', $this->scriptUrl)) {
+            throw new \InvalidArgumentException("scriptUrl must be an absolute https:// URL, got: \"{$this->scriptUrl}\".");
+        }
+        if ($this->widgetCssClass !== null) {
+            self::assertSafeCssClass($this->widgetCssClass);
+        }
+        self::assertSafeFieldName($this->tokenFieldName);
+
         foreach ($this->extraCssClasses as $class) {
             self::assertSafeCssClass($class);
         }
@@ -75,7 +90,7 @@ final class CaptchaWidgetDescriptor
             self::assertSafeAttributeName($name);
         }
         foreach ($this->extraHiddenFields as $name => $value) {
-            self::assertSafeAttributeName($name);
+            self::assertSafeFieldName($name);
         }
     }
 
@@ -88,14 +103,31 @@ final class CaptchaWidgetDescriptor
      */
     private static function assertSafeAttributeName(string $name): void
     {
+        self::assertSafeFieldName($name);
+
+        if (\in_array(\strtolower($name), self::RESERVED_ATTRIBUTES, true)) {
+            throw new \InvalidArgumentException("\"{$name}\" is controlled by HtmlHelper and cannot be set via extraAttributes.");
+        }
+    }
+
+    /**
+     * Shared shape check for anything that ends up as an HTML attribute
+     * name or a form field "name" value — rejects on* event handlers
+     * regardless of context.
+     *
+     * @param string $name
+     *
+     * @return void
+     *
+     * @throws \InvalidArgumentException
+     */
+    private static function assertSafeFieldName(string $name): void
+    {
         if (!\preg_match('/^[a-zA-Z_:][a-zA-Z0-9_.:-]*$/', $name)) {
             throw new \InvalidArgumentException("Invalid HTML attribute/field name: \"{$name}\".");
         }
         if (\stripos($name, 'on') === 0) {
             throw new \InvalidArgumentException("Event handler attributes (\"on*\") are not allowed: \"{$name}\".");
-        }
-        if (\in_array(\strtolower($name), self::RESERVED_ATTRIBUTES, true)) {
-            throw new \InvalidArgumentException("\"{$name}\" is controlled by HtmlHelper and cannot be set via extraAttributes/extraHiddenFields.");
         }
     }
 
