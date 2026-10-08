@@ -39,6 +39,7 @@ use rafalmasiarek\HttpClient\Http\TransportErrorKind;
 final class Captcha implements CaptchaVerifierInterface
 {
     private readonly LoggerInterface $logger;
+    private readonly HttpClientInterface $http;
 
     /**
      * @param CaptchaProviderInterface $provider
@@ -70,7 +71,7 @@ final class Captcha implements CaptchaVerifierInterface
     public function __construct(
         private readonly CaptchaProviderInterface $provider,
         private readonly ?RemoteIpProviderInterface $defaultIpProvider = null,
-        private readonly ?HttpClientInterface $http = null,
+        ?HttpClientInterface $http = null,
         private readonly float $timeout = 10.0,
         private readonly ?float $minScore = null,
         private readonly ?string $expectedAction = null,
@@ -89,6 +90,7 @@ final class Captcha implements CaptchaVerifierInterface
             throw new \InvalidArgumentException('expectedHostname cannot be an empty string.');
         }
         $this->logger = $logger ?? new NullLogger();
+        $this->http = $http ?? new CurlHttpClient(new SystemDnsResolver());
     }
 
     /**
@@ -108,6 +110,12 @@ final class Captcha implements CaptchaVerifierInterface
      */
     public function verify(string $token, string|RemoteIpProviderInterface|null $remoteIp = null): CaptchaResult
     {
+        if (\trim($token) === '') {
+            $this->log('warning', 'captcha.verify.empty_token');
+
+            return new CaptchaResult(success: false, errorCategories: [CaptchaErrorCategory::TokenRejected]);
+        }
+
         $ip = $this->resolveIp($remoteIp);
 
         $body = ['secret' => $this->provider->secretKey(), 'response' => $token] + $this->provider->extraParams();
@@ -115,9 +123,8 @@ final class Captcha implements CaptchaVerifierInterface
             $body['remoteip'] = $ip;
         }
 
-        $http = $this->http ?? new CurlHttpClient(new SystemDnsResolver());
         $endpoint = $this->provider->endpoint();
-        $response = $http->request('POST', $endpoint, ['body' => $body, 'timeout' => $this->timeout]);
+        $response = $this->http->request('POST', $endpoint, ['body' => $body, 'timeout' => $this->timeout]);
 
         $error = $response->getError();
         if ($error !== null) {
@@ -131,13 +138,19 @@ final class Captcha implements CaptchaVerifierInterface
             throw new CaptchaTransportException("Unable to reach {$endpoint}: {$error}", $transportInfo);
         }
 
-        $data = $response->json();
-        if (!\is_array($data)) {
-            $this->log('error', 'captcha.verify.invalid_response', ['status_code' => $response->getStatusCode()]);
-            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}", $response->getStatusCode());
+        $statusCode = $response->getStatusCode();
+        if ($statusCode < 200 || $statusCode >= 300) {
+            $this->logInvalidResponse($statusCode, 'http_status');
+            throw new CaptchaResponseException("CAPTCHA provider returned HTTP {$statusCode} from {$endpoint}", $statusCode);
         }
 
-        $rawCodes = \array_map('strval', (array) ($data['error-codes'] ?? []));
+        $data = $response->json();
+        if (!\is_array($data)) {
+            $this->logInvalidResponse($statusCode, 'body');
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}", $statusCode);
+        }
+
+        $rawCodes = $this->extractErrorCodes($data, $endpoint, $statusCode);
 
         $categories = [];
         foreach ($rawCodes as $code) {
@@ -147,15 +160,15 @@ final class Captcha implements CaptchaVerifierInterface
             }
         }
 
-        if (\array_key_exists('success', $data) && !\is_bool($data['success'])) {
-            $this->logInvalidResponse($response->getStatusCode(), 'success');
-            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"success\" is not a boolean", $response->getStatusCode());
+        if (!\array_key_exists('success', $data) || !\is_bool($data['success'])) {
+            $this->logInvalidResponse($statusCode, 'success');
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"success\" must be a boolean", $statusCode);
         }
-        $apiSuccess = $data['success'] ?? false;
+        $apiSuccess = $data['success'];
 
-        $score = $this->extractScore($data, $endpoint, $response->getStatusCode());
-        $action = $this->extractStringField($data, 'action', $endpoint, $response->getStatusCode());
-        $hostname = $this->extractStringField($data, 'hostname', $endpoint, $response->getStatusCode());
+        $score = $this->extractScore($data, $endpoint, $statusCode);
+        $action = $this->extractStringField($data, 'action', $endpoint, $statusCode);
+        $hostname = $this->extractStringField($data, 'hostname', $endpoint, $statusCode);
 
         // challenge_ts is purely informational (never used in a security decision below) —
         // coerced leniently rather than rejecting the whole response over a cosmetic field.
@@ -250,6 +263,39 @@ final class Captcha implements CaptchaVerifierInterface
     }
 
     /**
+     * @param array<string, mixed> $data
+     * @param string $endpoint
+     * @param int $statusCode
+     *
+     * @return list<string>
+     *
+     * @throws CaptchaResponseException When "error-codes" is present but not a list of scalars.
+     */
+    private function extractErrorCodes(array $data, string $endpoint, int $statusCode): array
+    {
+        if (!\array_key_exists('error-codes', $data) || $data['error-codes'] === null) {
+            return [];
+        }
+
+        $raw = $data['error-codes'];
+        if (!\is_array($raw) || !\array_is_list($raw)) {
+            $this->logInvalidResponse($statusCode, 'error-codes');
+            throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"error-codes\" is not a list", $statusCode);
+        }
+
+        $codes = [];
+        foreach ($raw as $code) {
+            if (!\is_scalar($code)) {
+                $this->logInvalidResponse($statusCode, 'error-codes');
+                throw new CaptchaResponseException("Malformed JSON response from {$endpoint}: \"error-codes\" contains a non-scalar entry", $statusCode);
+            }
+            $codes[] = (string) $code;
+        }
+
+        return $codes;
+    }
+
+    /**
      * @param int $statusCode
      * @param string $field
      *
@@ -262,7 +308,10 @@ final class Captcha implements CaptchaVerifierInterface
 
     /**
      * Resolves the IP to send, in order: an explicit per-call value, the
-     * Captcha-bound default, then the naive system fallback.
+     * Captcha-bound default, then the naive system fallback. Whatever the
+     * source, the result is validated as a real IPv4/IPv6 address — an
+     * invalid value (empty, malformed, stray whitespace) is treated as no
+     * IP at all rather than sent to the provider as-is.
      *
      * @param string|RemoteIpProviderInterface|null $remoteIp
      *
@@ -271,15 +320,20 @@ final class Captcha implements CaptchaVerifierInterface
     private function resolveIp(string|RemoteIpProviderInterface|null $remoteIp): ?string
     {
         if ($remoteIp instanceof RemoteIpProviderInterface) {
-            return $remoteIp->getRemoteIp();
+            $resolved = $remoteIp->getRemoteIp();
+        } elseif ($remoteIp !== null) {
+            $resolved = $remoteIp;
+        } elseif ($this->defaultIpProvider !== null) {
+            $resolved = $this->defaultIpProvider->getRemoteIp();
+        } else {
+            $resolved = (new SystemRemoteIpProvider())->getRemoteIp();
         }
-        if ($remoteIp !== null) {
-            return $remoteIp;
+
+        if ($resolved === null || \filter_var($resolved, \FILTER_VALIDATE_IP) === false) {
+            return null;
         }
-        if ($this->defaultIpProvider !== null) {
-            return $this->defaultIpProvider->getRemoteIp();
-        }
-        return (new SystemRemoteIpProvider())->getRemoteIp();
+
+        return $resolved;
     }
 
     /**

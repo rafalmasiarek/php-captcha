@@ -217,7 +217,7 @@ A provider's own glue JS can fail client-side in ways the server never sees — 
 ```js
 document.addEventListener('captcha:error', function (e) {
     // e.detail.instanceId — the widget's instanceId (see "Multiple widgets" above)
-    // e.detail.reason     — 'timeout' | 'execute_failed' | 'exception'
+    // e.detail.reason     — 'timeout' | 'execute_failed' | 'exception' | 'requestsubmit_unsupported'
     console.warn('CAPTCHA failed:', e.detail.instanceId, e.detail.reason);
 });
 ```
