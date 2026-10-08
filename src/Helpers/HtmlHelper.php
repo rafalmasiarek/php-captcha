@@ -35,7 +35,11 @@ final class HtmlHelper
     /** Placeholders valid only in CaptchaWidgetDescriptor::$extraJs (JSON-encoded, safe to embed in JS source). */
     public const ALLOWED_JS_TOKENS = ['__CAPTCHA_SITE_KEY_JS__', '__CAPTCHA_ACTION_JS__', '__CAPTCHA_INSTANCE_ID_JS__'];
 
-    private const TOKEN_PATTERN = '/__CAPTCHA_[A-Z0-9_]+__/';
+    // Case-insensitive on the middle segment deliberately: a miscased attempt
+    // (e.g. "__CAPTCHA_site_key__") must still be DETECTED as a token-shaped
+    // string so it gets rejected by assertKnownTokens() below, rather than
+    // silently passing through unrecognized as ordinary text.
+    private const TOKEN_PATTERN = '/__CAPTCHA_[A-Za-z0-9_]+__/';
 
     private const INSTANCE_ID_PATTERN = '/^[a-zA-Z0-9_-]+$/';
 
