@@ -6,7 +6,6 @@ namespace rafalmasiarek\Captcha\Provider;
 
 use rafalmasiarek\Captcha\CaptchaErrorCategory;
 use rafalmasiarek\Captcha\CaptchaProviderInterface;
-use rafalmasiarek\Captcha\Helpers\InvisibleGlue\RecaptchaV3Glue;
 
 /**
  * Google reCAPTCHA (v2 or v3) configuration. v2 responses have no
@@ -88,8 +87,9 @@ final class RecaptchaProvider implements CaptchaProviderInterface
     }
 
     /**
-     * Widget metadata for invisible v3 — carries its own RecaptchaV3Glue
-     * (Promise-based grecaptcha.execute()).
+     * Widget metadata for invisible v3 — widgetCssClass null means no
+     * checkbox; extraJs carries the whole grecaptcha.ready()/execute()
+     * (Promise-based) flow since there's no generic baseline for it.
      *
      * @return CaptchaWidgetDescriptor
      */
@@ -99,7 +99,26 @@ final class RecaptchaProvider implements CaptchaProviderInterface
             scriptUrl: 'https://www.google.com/recaptcha/api.js',
             widgetCssClass: null,
             tokenFieldName: 'g-recaptcha-response',
-            invisibleGlue: new RecaptchaV3Glue(),
+            scriptUrlParams: ['render' => '{siteKey}'],
+            extraJs: [
+                <<<'JS'
+                (function () {
+                    var el   = document.querySelector('.js-captcha-invisible');
+                    var form = el ? el.closest('form') : null;
+                    if (!form) return;
+
+                    form.addEventListener('submit', function (e) {
+                        e.preventDefault();
+                        grecaptcha.ready(function () {
+                            grecaptcha.execute({siteKeyJs}, { action: {actionJs} }).then(function (token) {
+                                el.value = token;
+                                form.submit();
+                            });
+                        });
+                    });
+                }());
+                JS,
+            ],
         );
     }
 }

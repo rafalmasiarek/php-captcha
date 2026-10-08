@@ -18,7 +18,9 @@ use rafalmasiarek\Captcha\Provider\CaptchaWidgetDescriptor;
 final class HtmlHelper
 {
     /**
-     * Widget markup: a visible checkbox div, or a hidden input when $widget is invisible.
+     * Widget markup: a div with a checkbox (widgetCssClass set), or a hidden
+     * input (widgetCssClass null) — plus any extraCssClasses/extraAttributes/
+     * extraHiddenFields the descriptor carries.
      *
      * @param CaptchaWidgetDescriptor $widget
      * @param string $siteKey
@@ -33,25 +35,31 @@ final class HtmlHelper
         string $successCallback = 'captchaSuccess',
         string $expiredCallback = 'captchaExpired',
     ): string {
-        if ($widget->isInvisible()) {
+        $extraFields = self::renderExtraHiddenFields($widget);
+        $extraAttrs  = self::renderExtraAttributes($widget);
+
+        if ($widget->widgetCssClass === null) {
             return '<input type="hidden" name="' . \htmlspecialchars($widget->tokenFieldName, \ENT_QUOTES)
-                . '" class="js-captcha-invisible">';
+                . '" class="js-captcha-invisible"' . $extraAttrs . '>' . $extraFields;
         }
 
-        return '<div class="' . \htmlspecialchars((string) $widget->widgetCssClass, \ENT_QUOTES) . ' js-captcha"'
+        $classes = \implode(' ', [$widget->widgetCssClass, 'js-captcha', ...$widget->extraCssClasses]);
+
+        return '<div class="' . \htmlspecialchars($classes, \ENT_QUOTES) . '"'
             . ' data-sitekey="' . \htmlspecialchars($siteKey, \ENT_QUOTES) . '"'
             . ' data-callback="' . \htmlspecialchars($successCallback, \ENT_QUOTES) . '"'
-            . ' data-expired-callback="' . \htmlspecialchars($expiredCallback, \ENT_QUOTES) . '"></div>';
+            . ' data-expired-callback="' . \htmlspecialchars($expiredCallback, \ENT_QUOTES) . '"'
+            . $extraAttrs . '></div>' . $extraFields;
     }
 
     /**
-     * <script> tags: the official widget script plus an inline glue script —
-     * button-disable-until-solved for a visible widget, intercept-submit-
-     * and-execute for an invisible one.
+     * <script> tags: the base widget script (scriptUrl + scriptUrlParams)
+     * plus glue JS — button-disable-until-solved when widgetCssClass is
+     * set, nothing baseline otherwise — followed by any extraJs entries.
      *
      * @param CaptchaWidgetDescriptor $widget
      * @param string $siteKey
-     * @param string $action Only meaningful when $widget is invisible; ignored otherwise.
+     * @param string $action Substituted into any "{action}"/"{actionJs}" placeholder.
      * @param string $successCallback Must match widget()'s $successCallback.
      * @param string $expiredCallback Must match widget()'s $expiredCallback.
      *
@@ -64,27 +72,113 @@ final class HtmlHelper
         string $successCallback = 'captchaSuccess',
         string $expiredCallback = 'captchaExpired',
     ): string {
-        return $widget->isInvisible()
-            ? self::invisibleScripts($widget, $siteKey, $action)
-            : self::visibleScripts($widget, $successCallback, $expiredCallback);
+        $scriptUrl = self::buildScriptUrl($widget, $siteKey, $action);
+
+        $script = $widget->widgetCssClass !== null
+            ? self::baseGlueJs($successCallback, $expiredCallback)
+            : '';
+
+        foreach ($widget->extraJs as $js) {
+            $script .= ' ' . self::substitutePlaceholders($js, $siteKey, $action);
+        }
+
+        $asyncDefer = $widget->widgetCssClass !== null ? ' async defer' : '';
+
+        return '<script src="' . \htmlspecialchars($scriptUrl, \ENT_QUOTES) . '"' . $asyncDefer . '></script>'
+            . '<script>' . self::minifyInlineJs($script) . '</script>';
     }
 
     /**
      * @param CaptchaWidgetDescriptor $widget
+     * @param string $siteKey
+     * @param string $action
+     *
+     * @return string $widget->scriptUrl with $widget->scriptUrlParams appended as a query string.
+     */
+    private static function buildScriptUrl(CaptchaWidgetDescriptor $widget, string $siteKey, string $action): string
+    {
+        if ($widget->scriptUrlParams === []) {
+            return $widget->scriptUrl;
+        }
+
+        $pairs = [];
+        foreach ($widget->scriptUrlParams as $name => $value) {
+            $pairs[] = \rawurlencode($name) . '=' . \rawurlencode(self::substitutePlaceholders($value, $siteKey, $action));
+        }
+
+        return $widget->scriptUrl . (\str_contains($widget->scriptUrl, '?') ? '&' : '?') . \implode('&', $pairs);
+    }
+
+    /**
+     * Replaces "{siteKey}"/"{action}" (raw) and "{siteKeyJs}"/"{actionJs}"
+     * (JSON-encoded, safe to embed directly in JS source) placeholders.
+     *
+     * @param string $template
+     * @param string $siteKey
+     * @param string $action
+     *
+     * @return string
+     */
+    private static function substitutePlaceholders(string $template, string $siteKey, string $action): string
+    {
+        return \str_replace(
+            ['{siteKey}', '{action}', '{siteKeyJs}', '{actionJs}'],
+            [
+                $siteKey,
+                $action,
+                \json_encode($siteKey, \JSON_UNESCAPED_SLASHES),
+                \json_encode($action, \JSON_UNESCAPED_SLASHES),
+            ],
+            $template,
+        );
+    }
+
+    /**
+     * @param CaptchaWidgetDescriptor $widget
+     *
+     * @return string Extra HTML attributes, each preceded by a space.
+     */
+    private static function renderExtraAttributes(CaptchaWidgetDescriptor $widget): string
+    {
+        $out = '';
+        foreach ($widget->extraAttributes as $name => $value) {
+            $out .= ' ' . \htmlspecialchars($name, \ENT_QUOTES) . '="' . \htmlspecialchars($value, \ENT_QUOTES) . '"';
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param CaptchaWidgetDescriptor $widget
+     *
+     * @return string Extra hidden <input> tags.
+     */
+    private static function renderExtraHiddenFields(CaptchaWidgetDescriptor $widget): string
+    {
+        $out = '';
+        foreach ($widget->extraHiddenFields as $name => $value) {
+            $out .= '<input type="hidden" name="' . \htmlspecialchars($name, \ENT_QUOTES)
+                . '" value="' . \htmlspecialchars($value, \ENT_QUOTES) . '">';
+        }
+
+        return $out;
+    }
+
+    /**
+     * Button-disable-until-solved glue for a visible widget: blocks form
+     * submission until the official script's data-callback fires.
+     *
      * @param string $successCallback
      * @param string $expiredCallback
      *
      * @return string
      */
-    private static function visibleScripts(
-        CaptchaWidgetDescriptor $widget,
-        string $successCallback,
-        string $expiredCallback,
-    ): string {
+    private static function baseGlueJs(string $successCallback, string $expiredCallback): string
+    {
         $successJs = \json_encode($successCallback, \JSON_UNESCAPED_SLASHES);
         $expiredJs = \json_encode($expiredCallback, \JSON_UNESCAPED_SLASHES);
 
-        $script = self::minifyInlineJs(<<<JS
+        return <<<JS
         (function () {
             var el     = document.querySelector('.js-captcha');
             var form   = el ? el.closest('form') : null;
@@ -125,33 +219,7 @@ final class HtmlHelper
                 if (hint) hint.style.display = '';
             };
         }());
-        JS);
-
-        return '<script src="' . \htmlspecialchars($widget->scriptUrl, \ENT_QUOTES) . '" async defer></script>'
-            . '<script>' . $script . '</script>';
-    }
-
-    /**
-     * @param CaptchaWidgetDescriptor $widget
-     * @param string $siteKey
-     * @param string $action
-     *
-     * @return string
-     */
-    private static function invisibleScripts(CaptchaWidgetDescriptor $widget, string $siteKey, string $action): string
-    {
-        $glue = $widget->invisibleGlue;
-        if ($glue === null) {
-            throw new \LogicException('invisibleScripts() called with a widget that has no invisibleGlue.');
-        }
-
-        $siteKeyJs = \json_encode($siteKey, \JSON_UNESCAPED_SLASHES);
-        $actionJs  = \json_encode($action, \JSON_UNESCAPED_SLASHES);
-
-        $script = self::minifyInlineJs($glue->glueJs($siteKeyJs, $actionJs));
-
-        return '<script src="' . \htmlspecialchars($glue->scriptUrl($siteKey), \ENT_QUOTES) . '"></script>'
-            . '<script>' . $script . '</script>';
+        JS;
     }
 
     /**
