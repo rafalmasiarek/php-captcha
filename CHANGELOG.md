@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/rafalmasiarek/php-captcha/compare/v2.0.1...v2.0.2) (2026-11-17)
+
+
+### Bug Fixes
+
+* rename includes to footer_includes in README.yml ([#9](https://github.com/rafalmasiarek/php-captcha/issues/9)) ([425867d](https://github.com/rafalmasiarek/php-captcha/commit/425867d6ce7cdcdfa4fd77b97b6e533700e3df40))
+
 ## [2.0.1](https://github.com/rafalmasiarek/php-captcha/compare/v2.0.0...v2.0.1) (2026-10-08)
 
 
