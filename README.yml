@@ -6,7 +6,7 @@ context:
   - |
     Universal CAPTCHA verification for PHP: Google reCAPTCHA (v2/v3), Cloudflare Turnstile, and hCaptcha behind one Strategy-pattern facade. Built on [`rafalmasiarek/http-client`](https://github.com/rafalmasiarek/php-http-client) — no provider-specific SDK, no cURL/Guzzle dependency of its own.
 
-includes:
+footer_includes:
   - docs/usage.md
   - docs/api.md
 
